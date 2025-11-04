@@ -1,0 +1,162 @@
+version: '3.8'
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: click_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: click_db
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - click_network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/click_db --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & FSM Storage
+  redis:
+    image: redis:7-alpine
+    container_name: click_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - click_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: click_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./shared:/app/shared
+      - ./config:/app/config
+      - ./logs:/app/logs
+    networks:
+      - click_network
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Telegram Bot
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: click_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    volumes:
+      - ./bot:/app/bot
+      - ./shared:/app/shared
+      - ./config:/app/config
+      - ./logs:/app/logs
+    networks:
+      - click_network
+    command: python -m bot.main
+
+  # Celery Worker (for background tasks)
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: click_celery_worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./shared:/app/shared
+      - ./config:/app/config
+      - ./logs:/app/logs
+    networks:
+      - click_network
+    command: celery -A backend.celery_app worker --loglevel=info
+
+  # Celery Beat (for scheduled tasks)
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: click_celery_beat
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+      - ./shared:/app/shared
+      - ./config:/app/config
+      - ./logs:/app/logs
+    networks:
+      - click_network
+    command: celery -A backend.celery_app beat --loglevel=info
+
+  # Flower (Celery monitoring)
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: click_flower
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - celery_worker
+    networks:
+      - click_network
+    command: celery -A backend.celery_app flower --port=5555
+
+networks:
+  click_network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+  mongodb_config:
+  redis_data:

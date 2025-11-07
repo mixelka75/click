@@ -69,13 +69,6 @@ def get_positions_keyboard(category: str, show_all_option: bool = False) -> Inli
                 callback_data=f"position:{position}"
             ))
 
-    # Add "Other" option
-    if not show_all_option:
-        builder.add(InlineKeyboardButton(
-            text="✏️ Другая должность",
-            callback_data=f"position:custom"
-        ))
-
     # Arrange in 1 column
     builder.adjust(1)
 

@@ -300,8 +300,18 @@ async def show_resume_details(callback: CallbackQuery, state: FSMContext):
 
                 text = format_resume_details(resume)
 
+                # Check if in favorites
+                from bot.handlers.common.favorites import check_in_favorites
+                telegram_id = callback.from_user.id
+                in_favorites = await check_in_favorites(telegram_id, resume_id, "resume")
+
+                # Build keyboard with favorites button
+                fav_text = "⭐ Убрать из избранного" if in_favorites else "⭐ В избранное"
+                fav_action = "remove" if in_favorites else "add"
+
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="✉️ Пригласить", callback_data=f"res_invite:{resume_id}")],
+                    [InlineKeyboardButton(text=fav_text, callback_data=f"fav:{fav_action}:resume:{resume_id}")],
                     [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="back_to_resume_list")]
                 ])
 

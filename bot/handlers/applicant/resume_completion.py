@@ -9,21 +9,26 @@ from datetime import datetime
 from loguru import logger
 import httpx
 
+from bot.filters import IsNotMenuButton
 from bot.states.resume_states import ResumeCreationStates
 from bot.keyboards.positions import get_work_schedule_keyboard, get_skills_keyboard
 from bot.keyboards.common import (
     get_cancel_keyboard,
+    get_back_cancel_keyboard,
     get_yes_no_keyboard,
     get_skip_button,
+    get_present_time_button,
     get_confirm_publish_keyboard,
 )
 from bot.utils.formatters import format_resume_preview
+from bot.utils.cancel_handlers import handle_cancel_resume
 from backend.models import User
 from shared.constants import SalaryType, EDUCATION_LEVELS, LANGUAGES, LANGUAGE_LEVELS
 from config.settings import settings
 
 
 router = Router()
+router.message.filter(IsNotMenuButton())
 
 
 # ============ SALARY AND SCHEDULE ============
@@ -39,9 +44,8 @@ async def process_salary(message_or_callback, state: FSMContext):
         message = message_or_callback.message
     else:
         message = message_or_callback
-        if message.text == "❌ Отменить":
-            await state.clear()
-            await message.answer("Создание резюме отменено.")
+        if message.text == "🚫 Отменить создание":
+            await handle_cancel_resume(message, state)
             return
 
         try:
@@ -88,11 +92,12 @@ async def process_salary_type(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
     salary_type = SalaryType.GROSS if callback.data == "salary_type:gross" else SalaryType.NET
-    await state.update_data(salary_type=salary_type)
+    salary_type_text = "До вычета налогов" if salary_type == SalaryType.GROSS else "На руки"
+    await state.update_data(salary_type=salary_type.value)
 
     data = await state.get_data()
     await callback.message.answer(
-        f"✅ Зарплата: {data['desired_salary']:,} руб. ({salary_type})\n\n"
+        f"✅ Зарплата: {data['desired_salary']:,} руб. ({salary_type_text})\n\n"
         "<b>Какой график работы вас интересует?</b>\n"
         "(можно выбрать несколько)",
         reply_markup=get_work_schedule_keyboard([])
@@ -164,9 +169,20 @@ async def ask_add_work_experience(callback: CallbackQuery, state: FSMContext):
 @router.message(ResumeCreationStates.work_experience_company)
 async def process_work_company(message: Message, state: FSMContext):
     """Process company name."""
-    if message.text == "❌ Отменить":
-        await state.clear()
-        await message.answer("Создание резюме отменено.")
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        # Return to work schedule
+        data = await state.get_data()
+        schedules = data.get("work_schedule", [])
+        await message.answer(
+            "<b>Какой график работы вас интересует?</b>\n"
+            "(можно выбрать несколько)",
+            reply_markup=get_work_schedule_keyboard(schedules)
+        )
+        await state.set_state(ResumeCreationStates.work_schedule)
         return
 
     # Start new work experience entry
@@ -174,7 +190,7 @@ async def process_work_company(message: Message, state: FSMContext):
 
     await message.answer(
         "<b>Ваша должность в этой компании:</b>",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.work_experience_position)
 
@@ -182,9 +198,19 @@ async def process_work_company(message: Message, state: FSMContext):
 @router.message(ResumeCreationStates.work_experience_position)
 async def process_work_position(message: Message, state: FSMContext):
     """Process position."""
-    if message.text == "❌ Отменить":
-        await state.clear()
-        await message.answer("Создание резюме отменено.")
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        # Return to company name
+        await message.answer(
+            "💼 <b>Опыт работы</b>\n\n"
+            "Отлично! Давайте добавим ваш опыт.\n\n"
+            "<b>Название компании:</b>",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.work_experience_company)
         return
 
     await state.update_data(temp_position=message.text.strip())
@@ -209,9 +235,8 @@ async def process_work_start_date(message_or_callback, state: FSMContext):
         message = message_or_callback.message
     else:
         message = message_or_callback
-        if message.text == "❌ Отменить":
-            await state.clear()
-            await message.answer("Создание резюме отменено.")
+        if message.text == "🚫 Отменить создание":
+            await handle_cancel_resume(message, state)
             return
 
         start_date = message.text.strip()
@@ -225,8 +250,8 @@ async def process_work_start_date(message_or_callback, state: FSMContext):
     await message.answer(
         "<b>Период работы (окончание):</b>\n"
         "Формат: ММ.ГГГГ\n"
-        "Или нажмите 'По настоящее время'",
-        reply_markup=get_skip_button()  # Skip = "по настоящее время"
+        "Или нажмите кнопку ниже, чтобы пропустить",
+        reply_markup=get_present_time_button()
     )
     await state.set_state(ResumeCreationStates.work_experience_end_date)
 
@@ -243,9 +268,8 @@ async def process_work_end_date(message_or_callback, state: FSMContext):
         end_date = "по настоящее время"
     else:
         message = message_or_callback
-        if message.text == "❌ Отменить":
-            await state.clear()
-            await message.answer("Создание резюме отменено.")
+        if message.text == "🚫 Отменить создание":
+            await handle_cancel_resume(message, state)
             return
 
         end_date = message.text.strip()
@@ -271,9 +295,8 @@ async def process_work_responsibilities(message_or_callback, state: FSMContext):
         message = message_or_callback.message
     else:
         message = message_or_callback
-        if message.text == "❌ Отменить":
-            await state.clear()
-            await message.answer("Создание резюме отменено.")
+        if message.text == "🚫 Отменить создание":
+            await handle_cancel_resume(message, state)
             return
 
         responsibilities = message.text.strip()
@@ -369,9 +392,8 @@ async def process_education_simple(message_or_callback, state: FSMContext):
         message = message_or_callback.message
     else:
         message = message_or_callback
-        if message.text == "❌ Отменить":
-            await state.clear()
-            await message.answer("Создание резюме отменено.")
+        if message.text == "🚫 Отменить создание":
+            await handle_cancel_resume(message, state)
             return
 
         institution = message.text.strip()

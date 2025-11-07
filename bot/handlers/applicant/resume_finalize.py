@@ -3,6 +3,7 @@ Resume creation - final steps (skills, about, preview, publish).
 """
 
 from aiogram import Router, F
+from bot.filters import IsNotMenuButton
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from loguru import logger
@@ -17,6 +18,7 @@ from config.settings import settings
 
 
 router = Router()
+router.message.filter(IsNotMenuButton())
 
 
 # ============ SKILLS ============
@@ -79,7 +81,7 @@ async def process_custom_skills(message_or_callback, state: FSMContext):
         message = message_or_callback.message
     else:
         message = message_or_callback
-        if message.text == "❌ Отменить":
+        if message.text == "🚫 Отменить создание":
             await state.clear()
             await message.answer("Создание резюме отменено.")
             return
@@ -124,7 +126,7 @@ async def process_about(message_or_callback, state: FSMContext):
         message = message_or_callback.message
     else:
         message = message_or_callback
-        if message.text == "❌ Отменить":
+        if message.text == "🚫 Отменить создание":
             await state.clear()
             await message.answer("Создание резюме отменено.")
             return
@@ -137,11 +139,46 @@ async def process_about(message_or_callback, state: FSMContext):
     if about:
         await state.update_data(about=about)
 
+    # Ask for photo
+    await message.answer(
+        "📸 <b>Фотография</b>\n\n"
+        "Хотите добавить фото к резюме?\n"
+        "Отправьте фотографию или нажмите 'Пропустить'.",
+        reply_markup=get_skip_button()
+    )
+    await state.set_state(ResumeCreationStates.photo)
+
+
+@router.message(ResumeCreationStates.photo, F.photo)
+async def process_photo(message: Message, state: FSMContext):
+    """Process photo."""
+    # Get the largest photo
+    photo = message.photo[-1]
+    await state.update_data(photo_file_id=photo.file_id)
+
+    await message.answer("✅ Фото добавлено!")
+
     # Show preview
     data = await state.get_data()
     preview_text = format_resume_preview(data)
 
     await message.answer(
+        preview_text,
+        reply_markup=get_confirm_publish_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.preview)
+
+
+@router.callback_query(ResumeCreationStates.photo, F.data == "skip")
+async def skip_photo(callback: CallbackQuery, state: FSMContext):
+    """Skip photo."""
+    await callback.answer()
+
+    # Show preview
+    data = await state.get_data()
+    preview_text = format_resume_preview(data)
+
+    await callback.message.answer(
         preview_text,
         reply_markup=get_confirm_publish_keyboard()
     )
@@ -185,7 +222,9 @@ async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
         # Get all data
         data = await state.get_data()
 
-        # Create resume via API
+        # Build base API URL (используем settings.api_url вместо хардкода backend:8000)
+        base_url = settings.api_url  # Already includes host, port и префикс
+
         try:
             async with httpx.AsyncClient() as client:
                 # Prepare resume data
@@ -197,40 +236,41 @@ async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
                     "ready_for_business_trips": data.get("ready_for_business_trips", False),
                     "phone": data.get("phone"),
                     "email": data.get("email"),
+                    "photo_file_id": data.get("photo_file_id"),  # Ignored серверной моделью, не критично
                     "desired_position": data.get("desired_position"),
                     "position_category": data.get("position_category"),
                     "desired_salary": data.get("desired_salary"),
-                    "salary_type": data.get("salary_type", "На руки"),
+                    # salary_type добавляем только при наличии выбора пользователя
+                    # иначе поле опустим и сервер применит дефолт 'На руки'
+                    # "salary_type": data.get("salary_type"),
                     "work_schedule": data.get("work_schedule", []),
                     "skills": data.get("skills", []),
                     "about": data.get("about"),
                     "cuisines": data.get("cuisines", []),
                 }
 
-                # Add work experience if exists
+                # Если salary_type указан — добавим его отдельно
+                if data.get("salary_type"):
+                    resume_data["salary_type"] = data["salary_type"]
+
                 if data.get("work_experience"):
                     resume_data["work_experience"] = data["work_experience"]
-
-                # Add education if exists
                 if data.get("education"):
                     resume_data["education"] = data["education"]
 
-                # Create resume
-                response = await client.post(
-                    f"http://backend:8000{settings.api_prefix}/resumes",
-                    json=resume_data,
-                    timeout=10.0
-                )
+                create_url = f"{base_url}/resumes"
+                response = await client.post(create_url, json=resume_data, timeout=10.0)
 
                 if response.status_code == 201:
                     resume = response.json()
-                    resume_id = resume["id"]
+                    logger.info(f"Resume created, response keys: {resume.keys()}")
+                    resume_id = resume.get("id") or resume.get("_id")
+                    if not resume_id:
+                        logger.error(f"No ID in response: {resume}")
+                        raise ValueError("No resume ID returned from API")
 
-                    # Publish resume
-                    publish_response = await client.patch(
-                        f"http://backend:8000{settings.api_prefix}/resumes/{resume_id}/publish",
-                        timeout=10.0
-                    )
+                    publish_url = f"{base_url}/resumes/{resume_id}/publish"
+                    publish_response = await client.patch(publish_url, timeout=10.0)
 
                     if publish_response.status_code == 200:
                         await callback.message.answer(
@@ -252,7 +292,13 @@ async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
                             reply_markup=get_main_menu_applicant()
                         )
                 else:
-                    error_detail = response.json().get("detail", "Неизвестная ошибка")
+                    # Попытка извлечь detail (может быть не JSON при сетевой ошибке)
+                    error_detail = None
+                    try:
+                        error_detail = response.json().get("detail")
+                    except Exception:
+                        error_detail = response.text or "Неизвестная ошибка"
+
                     await callback.message.answer(
                         f"❌ Ошибка при создании резюме:\n{error_detail}",
                         reply_markup=get_main_menu_applicant()
@@ -273,13 +319,36 @@ async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
 
 # ============ CANCEL HANDLER ============
 
-@router.message(F.text == "❌ Отменить")
+@router.message(F.text == "🚫 Отменить создание")
 async def cancel_creation(message: Message, state: FSMContext):
     """Cancel resume creation at any step."""
     current_state = await state.get_state()
     if current_state:
+        # Check if this is first resume creation
+        data = await state.get_data()
+        is_first_resume = data.get("first_resume", False)
+
         await state.clear()
-        await message.answer(
-            "❌ Создание резюме отменено.",
-            reply_markup=get_main_menu_applicant()
-        )
+
+        if is_first_resume:
+            # Delete user and return to role selection
+            telegram_id = message.from_user.id
+            user = await User.find_one(User.telegram_id == telegram_id)
+            if user:
+                await user.delete()
+                logger.info(f"Deleted user {telegram_id} after canceling first resume")
+
+            from bot.keyboards.common import get_role_selection_keyboard
+            welcome_text = (
+                "👋 <b>Добро пожаловать в CLICK!</b>\n\n"
+                "🎯 <b>CLICK</b> — это сервис для поиска работы и сотрудников в сфере HoReCa "
+                "(рестораны, бары, кафе, гостиницы).\n\n"
+                "Выберите, кто вы:"
+            )
+            await message.answer(welcome_text, reply_markup=get_role_selection_keyboard())
+        else:
+            # Just cancel creation and return to menu
+            await message.answer(
+                "❌ Создание резюме отменено.",
+                reply_markup=get_main_menu_applicant()
+            )

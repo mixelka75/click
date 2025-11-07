@@ -3,6 +3,7 @@ Vacancy creation handlers - Part 1: Position, Company, Location, Contact.
 """
 
 from aiogram import Router, F
+from bot.filters import IsNotMenuButton
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from loguru import logger
@@ -19,36 +20,9 @@ from shared.constants import UserRole, POSITION_CATEGORIES
 
 
 router = Router()
-
-
-@router.message(F.text == "📝 Создать вакансию")
-async def start_vacancy_creation(message: Message, state: FSMContext):
-    """Start vacancy creation process."""
-    telegram_id = message.from_user.id
-    user = await User.find_one(User.telegram_id == telegram_id)
-
-    if not user or user.role != UserRole.EMPLOYER:
-        await message.answer("Эта функция доступна только для работодателей.")
-        return
-
-    logger.info(f"User {telegram_id} started vacancy creation")
-
-    await state.set_data({})
-
-    welcome_text = (
-        "📝 <b>Создание вакансии</b>\n\n"
-        "Отлично! Давайте создадим вакансию.\n"
-        "Я буду задавать вам вопросы шаг за шагом.\n\n"
-        "Вы можете в любой момент использовать /cancel для отмены.\n\n"
-        "<b>На какую должность вы ищете сотрудника?</b>\n"
-        "Выберите категорию:"
-    )
-
-    await message.answer(
-        welcome_text,
-        reply_markup=get_position_categories_keyboard()
-    )
-    await state.set_state(VacancyCreationStates.position_category)
+# Apply filter to ALL handlers in this router - don't process menu buttons
+# Note: Start handler moved to vacancy_handlers.py where menu button handlers belong
+router.message.filter(IsNotMenuButton())
 
 
 @router.callback_query(VacancyCreationStates.position_category, F.data.startswith("position_cat:"))

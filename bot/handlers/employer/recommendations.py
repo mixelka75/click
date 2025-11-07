@@ -8,79 +8,79 @@ from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import InlineKeyboardButton
 from loguru import logger
-import httpx
+from beanie import PydanticObjectId
 
-from config.settings import settings
-from bot.utils.auth import get_user_token
+from backend.models import User, Resume, Vacancy
+from backend.services.recommendation_service import recommendation_service
 
 router = Router()
 
 
-@router.message(F.text == "💡 Рекомендованные кандидаты")
+@router.message(F.text == "🔍 Искать сотрудников")
 async def show_candidate_recommendations_menu(message: Message, state: FSMContext):
-    """Show menu to select vacancy for candidate recommendations."""
+    """Show menu to select vacancy for employee search recommendations."""
     try:
-        token = await get_user_token(state)
-        if not token:
-            await message.answer("Ошибка авторизации. Используйте /start для входа.")
+        telegram_id = message.from_user.id
+        user = await User.find_one(User.telegram_id == telegram_id)
+
+        if not user:
+            await message.answer("Пользователь не найден. Используйте /start для регистрации.")
             return
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{settings.api_url}/vacancies/my",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10.0
-            )
+        # Get user's vacancies
+        vacancies = await Vacancy.find({"user.$id": user.id}).to_list()
 
-            if response.status_code != 200:
-                await message.answer("Не удалось загрузить список вакансий.")
-                return
-
-            vacancies = response.json()
-
-            if not vacancies:
-                await message.answer(
-                    "У вас пока нет вакансий.\n"
-                    "Создайте вакансию, чтобы получать рекомендации кандидатов."
-                )
-                return
-
-            # Filter published vacancies
-            published_vacancies = [v for v in vacancies if v.get("is_published")]
-
-            if not published_vacancies:
-                await message.answer(
-                    "У вас нет опубликованных вакансий.\n"
-                    "Опубликуйте вакансию, чтобы получать рекомендации."
-                )
-                return
-
-            # If only one vacancy, show recommendations directly
-            if len(published_vacancies) == 1:
-                await show_resume_recommendations(
-                    message,
-                    published_vacancies[0]["id"],
-                    state
-                )
-                return
-
-            # Otherwise, show vacancy selection
-            builder = InlineKeyboardBuilder()
-
-            for vacancy in published_vacancies[:10]:
-                position = vacancy.get("position", "Без названия")
-                vacancy_id = vacancy.get("id")
-                builder.row(
-                    InlineKeyboardButton(
-                        text=f"💼 {position[:40]}",
-                        callback_data=f"recommend_for_vacancy:{vacancy_id}"
-                    )
-                )
-
+        if not vacancies:
             await message.answer(
-                "📋 Выберите вакансию для получения рекомендаций кандидатов:",
-                reply_markup=builder.as_markup()
+                "У вас пока нет вакансий.\n"
+                "Создайте вакансию, чтобы получать рекомендации кандидатов."
             )
+            return
+
+        # Filter published vacancies
+        published_vacancies = [v for v in vacancies if v.is_published]
+
+        if not published_vacancies:
+            await message.answer(
+                "У вас нет опубликованных вакансий.\n"
+                "Опубликуйте вакансию, чтобы получать рекомендации."
+            )
+            return
+
+        # If only one vacancy, show recommendations directly
+        if len(published_vacancies) == 1:
+            await show_resume_recommendations(
+                message,
+                str(published_vacancies[0].id),
+                state
+            )
+            return
+
+        # Otherwise, show vacancy selection
+        builder = InlineKeyboardBuilder()
+
+        for vacancy in published_vacancies[:10]:
+            position = vacancy.position or "Не указана должность"
+            vacancy_id = str(vacancy.id)
+            salary_str = ""
+            if vacancy.salary_min and vacancy.salary_max:
+                salary_str = f"{vacancy.salary_min//1000}-{vacancy.salary_max//1000}к₽"
+            elif vacancy.salary_min:
+                salary_str = f"от {vacancy.salary_min//1000}к₽"
+            else:
+                salary_str = "не указана"
+            button_text = f"💼 {position} | {salary_str} | {vacancy.city}"
+            builder.row(
+                InlineKeyboardButton(
+                    text=button_text[:64],
+                    callback_data=f"recommend_for_vacancy:{vacancy_id}"
+                )
+            )
+
+        await message.answer(
+            "📋 Выберите вакансию для получения рекомендаций кандидатов:",
+            reply_markup=builder.as_markup()
+        )
 
     except Exception as e:
         logger.error(f"Error showing candidate recommendations menu: {e}")
@@ -103,40 +103,37 @@ async def handle_vacancy_selection_for_recommendations(callback: CallbackQuery, 
 async def show_resume_recommendations(message: Message, vacancy_id: str, state: FSMContext):
     """Show recommended resumes for a vacancy."""
     try:
-        token = await get_user_token(state)
+        # Get vacancy
+        vacancy = await Vacancy.get(PydanticObjectId(vacancy_id))
+        if not vacancy:
+            await message.answer("Вакансия не найдена.")
+            return
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{settings.api_url}/recommendations/resumes-for-vacancy/{vacancy_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"limit": 10, "min_score": 40.0},
-                timeout=15.0
+        # Get recommendations using service
+        recommendations = await recommendation_service.recommend_resumes_for_vacancy(
+            vacancy=vacancy,
+            limit=10,
+            min_score=40.0
+        )
+
+        if not recommendations:
+            await message.answer(
+                "🔍 К сожалению, подходящих кандидатов не найдено.\n\n"
+                "Попробуйте:\n"
+                "• Расширить требования к вакансии\n"
+                "• Увеличить диапазон зарплаты\n"
+                "• Проверить наличие активных резюме"
             )
+            return
 
-            if response.status_code != 200:
-                await message.answer("Не удалось загрузить рекомендации.")
-                return
+        # Save recommendations to state for navigation
+        await state.update_data(
+            current_candidate_recs=recommendations,
+            current_candidate_index=0
+        )
 
-            recommendations = response.json()
-
-            if not recommendations:
-                await message.answer(
-                    "🔍 К сожалению, подходящих кандидатов не найдено.\n\n"
-                    "Попробуйте:\n"
-                    "• Расширить требования к вакансии\n"
-                    "• Увеличить диапазон зарплаты\n"
-                    "• Проверить наличие активных резюме"
-                )
-                return
-
-            # Save recommendations to state for navigation
-            await state.update_data(
-                current_candidate_recs=recommendations,
-                current_candidate_index=0
-            )
-
-            # Show first recommendation
-            await show_candidate_card(message, state, 0, edit=False)
+        # Show first recommendation
+        await show_candidate_card(message, state, 0, edit=False)
 
     except Exception as e:
         logger.error(f"Error showing resume recommendations: {e}")
@@ -154,7 +151,7 @@ async def show_candidate_card(message: Message, state: FSMContext, index: int, e
             return
 
         rec = recommendations[index]
-        resume = rec.get("resume", {})
+        resume = rec.get("resume")  # This is now a Resume object
         score = rec.get("score", 0)
         match_details = rec.get("match_details", {})
 
@@ -162,23 +159,22 @@ async def show_candidate_card(message: Message, state: FSMContext, index: int, e
         text = f"💡 <b>Рекомендация #{index + 1} из {len(recommendations)}</b>\n"
         text += f"🎯 <b>Совпадение: {score}%</b>\n\n"
 
-        text += f"<b>{resume.get('desired_position', 'Кандидат')}</b>\n\n"
+        text += f"<b>{resume.desired_position}</b>\n\n"
 
-        if resume.get("first_name") or resume.get("last_name"):
-            name = f"{resume.get('first_name', '')} {resume.get('last_name', '')}".strip()
-            text += f"👤 {name}\n"
+        if resume.full_name:
+            text += f"👤 {resume.full_name}\n"
 
-        if resume.get("city"):
+        if resume.city:
             match_icon = "✅" if match_details.get("location_match") else "📍"
-            text += f"{match_icon} {resume['city']}\n"
+            text += f"{match_icon} {resume.city}\n"
 
-        if resume.get("desired_salary"):
+        if resume.desired_salary:
             salary_icon = "✅" if match_details.get("salary_compatible") else "💰"
-            text += f"{salary_icon} Зарплата: {resume['desired_salary']:,} руб.\n"
+            text += f"{salary_icon} Зарплата: {resume.desired_salary:,} руб.\n"
 
-        if resume.get("total_experience_years") is not None:
+        if resume.total_experience_years is not None:
             exp_icon = "✅" if match_details.get("experience_sufficient") else "📊"
-            years = resume['total_experience_years']
+            years = resume.total_experience_years
             text += f"{exp_icon} Опыт: {years} {_get_years_word(years)}\n"
 
         # Match details
@@ -199,8 +195,8 @@ async def show_candidate_card(message: Message, state: FSMContext, index: int, e
         if match_details.get("salary_compatible"):
             text += "✅ Подходящая зарплата\n"
 
-        if resume.get("about"):
-            about = resume["about"]
+        if resume.about:
+            about = resume.about
             if len(about) > 200:
                 about = about[:200] + "..."
             text += f"\n📝 {about}\n"
@@ -226,7 +222,7 @@ async def show_candidate_card(message: Message, state: FSMContext, index: int, e
         builder.row(*nav_buttons)
 
         # Action buttons
-        resume_id = resume.get("id")
+        resume_id = str(resume.id)
         builder.row(
             InlineKeyboardButton(text="👀 Полное резюме", callback_data=f"view_full_resume_rec:{resume_id}")
         )
@@ -288,70 +284,60 @@ async def view_full_resume_from_recommendation(callback: CallbackQuery, state: F
         await callback.answer()
 
         resume_id = callback.data.split(":")[1]
-        token = await get_user_token(state)
+        resume = await Resume.get(PydanticObjectId(resume_id))
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{settings.api_url}/resumes/{resume_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10.0
-            )
+        if not resume:
+            await callback.message.answer("Резюме не найдено.")
+            return
 
-            if response.status_code != 200:
-                await callback.message.answer("Не удалось загрузить резюме.")
-                return
+        text = f"<b>{resume.desired_position}</b>\n\n"
 
-            resume = response.json()
+        if resume.full_name:
+            text += f"👤 <b>ФИО:</b> {resume.full_name}\n"
 
-            text = f"<b>{resume.get('desired_position', 'Резюме')}</b>\n\n"
+        if resume.position_category:
+            text += f"📂 <b>Категория:</b> {resume.position_category}\n"
 
-            if resume.get("first_name") or resume.get("last_name"):
-                name = f"{resume.get('first_name', '')} {resume.get('last_name', '')}".strip()
-                text += f"👤 <b>ФИО:</b> {name}\n"
+        if resume.city:
+            text += f"📍 <b>Город:</b> {resume.city}\n"
+            if resume.ready_to_relocate:
+                text += f"   ✈️ Готов к переезду\n"
 
-            if resume.get("position_category"):
-                text += f"📂 <b>Категория:</b> {resume['position_category']}\n"
+        if resume.desired_salary:
+            text += f"💰 <b>Желаемая зарплата:</b> {resume.desired_salary:,} руб.\n"
 
-            if resume.get("city"):
-                text += f"📍 <b>Город:</b> {resume['city']}\n"
-                if resume.get("ready_to_relocate"):
-                    text += f"   ✈️ Готов к переезду\n"
+        if resume.total_experience_years is not None:
+            years = resume.total_experience_years
+            text += f"📊 <b>Опыт:</b> {years} {_get_years_word(years)}\n"
 
-            if resume.get("desired_salary"):
-                text += f"💰 <b>Желаемая зарплата:</b> {resume['desired_salary']:,} руб.\n"
+        if resume.skills:
+            skills = ", ".join(resume.skills)
+            text += f"\n💼 <b>Навыки:</b>\n{skills}\n"
 
-            if resume.get("total_experience_years") is not None:
-                years = resume['total_experience_years']
-                text += f"📊 <b>Опыт:</b> {years} {_get_years_word(years)}\n"
+        if resume.education:
+            text += f"\n🎓 <b>Образование:</b>\n"
+            for edu in resume.education[:3]:
+                institution = edu.institution if hasattr(edu, 'institution') else 'Не указано'
+                text += f"   • {institution}\n"
 
-            if resume.get("skills"):
-                skills = ", ".join(resume['skills'])
-                text += f"\n💼 <b>Навыки:</b>\n{skills}\n"
+        if resume.about:
+            text += f"\n📝 <b>О себе:</b>\n{resume.about}\n"
 
-            if resume.get("education"):
-                text += f"\n🎓 <b>Образование:</b>\n"
-                for edu in resume['education'][:3]:
-                    institution = edu.get('institution', 'Не указано')
-                    text += f"   • {institution}\n"
+        if resume.phone:
+            text += f"\n📞 <b>Телефон:</b> {resume.phone}\n"
 
-            if resume.get("about"):
-                text += f"\n📝 <b>О себе:</b>\n{resume['about']}\n"
+        if resume.email:
+            text += f"📧 <b>Email:</b> {resume.email}\n"
 
-            if resume.get("contact_phone"):
-                text += f"\n📞 <b>Телефон:</b> {resume['contact_phone']}\n"
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            InlineKeyboardButton(text="📧 Пригласить", callback_data=f"invite_candidate:{resume_id}")
+        )
+        builder.row(
+            InlineKeyboardButton(text="◀️ Назад к рекомендациям", callback_data="back_to_candidate_recs")
+        )
 
-            if resume.get("contact_email"):
-                text += f"📧 <b>Email:</b> {resume['contact_email']}\n"
-
-            builder = InlineKeyboardBuilder()
-            builder.row(
-                InlineKeyboardButton(text="📧 Пригласить", callback_data=f"invite_candidate:{resume_id}")
-            )
-            builder.row(
-                InlineKeyboardButton(text="◀️ Назад к рекомендациям", callback_data="back_to_candidate_recs")
-            )
-
-            await callback.message.answer(text, reply_markup=builder.as_markup())
+        await callback.message.answer(text, reply_markup=builder.as_markup())
 
     except Exception as e:
         logger.error(f"Error viewing full resume: {e}")
@@ -379,51 +365,60 @@ async def invite_candidate_from_recommendation(callback: CallbackQuery, state: F
         await callback.answer("Отправка приглашения...")
 
         resume_id = callback.data.split(":")[1]
-        token = await get_user_token(state)
+        telegram_id = callback.from_user.id
+
+        # Get user
+        user = await User.find_one(User.telegram_id == telegram_id)
+        if not user:
+            await callback.message.answer("Пользователь не найден. Используйте /start для регистрации.")
+            return
 
         # Get user's vacancies
-        async with httpx.AsyncClient() as client:
-            vacancies_response = await client.get(
-                f"{settings.api_url}/vacancies/my",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10.0
-            )
+        from backend.models import Response
+        vacancies = await Vacancy.find({"user.$id": user.id}).to_list()
+        published_vacancies = [v for v in vacancies if v.is_published]
 
-            if vacancies_response.status_code != 200:
-                await callback.message.answer("Не удалось загрузить вакансии.")
-                return
+        if not published_vacancies:
+            await callback.message.answer("У вас нет опубликованных вакансий.")
+            return
 
-            vacancies = vacancies_response.json()
-            published_vacancies = [v for v in vacancies if v.get("is_published")]
+        # Use first published vacancy
+        vacancy = published_vacancies[0]
 
-            if not published_vacancies:
-                await callback.message.answer("У вас нет опубликованных вакансий.")
-                return
+        # Get resume
+        resume = await Resume.get(PydanticObjectId(resume_id), fetch_links=True)
+        if not resume:
+            await callback.message.answer("Резюме не найдено.")
+            return
 
-            # Use first published vacancy or show selection
-            vacancy_id = published_vacancies[0]["id"]
+        # Check if already invited
+        existing_response = await Response.find_one(
+            Response.employer.id == user.id,
+            Response.vacancy.id == vacancy.id,
+            Response.resume.id == resume.id
+        )
 
-            # Create invitation
-            response = await client.post(
-                f"{settings.api_url}/responses/invite",
-                headers={"Authorization": f"Bearer {token}"},
-                json={
-                    "vacancy_id": vacancy_id,
-                    "resume_id": resume_id
-                },
-                timeout=10.0
-            )
+        if existing_response:
+            await callback.message.answer("❌ Вы уже приглашали этого кандидата.")
+            return
 
-            if response.status_code == 201:
-                await callback.message.answer(
-                    "✅ Приглашение успешно отправлено!\n\n"
-                    "Кандидат получит уведомление и сможет принять или отклонить приглашение."
-                )
-            elif response.status_code == 400:
-                error = response.json()
-                await callback.message.answer(f"❌ {error.get('detail', 'Ошибка при отправке приглашения')}")
-            else:
-                await callback.message.answer("❌ Не удалось отправить приглашение. Попробуйте позже.")
+        # Create invitation
+        from shared.constants import ResponseStatus
+
+        response = Response(
+            applicant=resume.user,
+            employer=user,
+            resume=resume,
+            vacancy=vacancy,
+            is_invitation=True,
+            status=ResponseStatus.PENDING
+        )
+        await response.insert()
+
+        await callback.message.answer(
+            "✅ Приглашение успешно отправлено!\n\n"
+            "Кандидат получит уведомление и сможет принять или отклонить приглашение."
+        )
 
     except Exception as e:
         logger.error(f"Error inviting candidate: {e}")

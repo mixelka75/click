@@ -140,3 +140,6 @@ POSITION_CATEGORY_NAMES = {
     PositionCategory.SUPPORT: "Обслуживающий и вспомогательный персонал",
     PositionCategory.OTHER: "Другая должность",
 }
+
+# Alias for backward compatibility
+POSITION_CATEGORIES = POSITION_CATEGORY_NAMES

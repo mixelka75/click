@@ -12,8 +12,11 @@ from aiogram.fsm.storage.redis import RedisStorage
 from config.settings import settings
 from backend.database import mongodb
 
+# Import middlewares
+from bot.middlewares import StateResetMiddleware
+
 # Import handlers
-from bot.handlers.common import start, help_handler, statistics
+from bot.handlers.common import start, help_handler, statistics, favorites, profile, chat
 from bot.handlers.applicant import (
     resume_handlers,
     resume_creation,
@@ -94,39 +97,73 @@ async def main():
     # Initialize dispatcher
     dp = Dispatcher(storage=storage)
 
+    # DEBUG: Add logging middleware to see which handlers are called
+    from aiogram import BaseMiddleware
+    from aiogram.types import Message as TgMessage
+    from typing import Callable, Dict, Any, Awaitable
+
+    class DebugMiddleware(BaseMiddleware):
+        async def __call__(
+            self,
+            handler: Callable[[TgMessage, Dict[str, Any]], Awaitable[Any]],
+            event: TgMessage,
+            data: Dict[str, Any]
+        ) -> Any:
+            logger.error(f"🚨🚨🚨 DEBUG: Calling handler: {handler}")
+            result = await handler(event, data)
+            logger.error(f"🚨🚨🚨 DEBUG: Handler result: {result}")
+            return result
+
+    # Register middlewares
+    dp.message.middleware(DebugMiddleware())
+    dp.message.middleware(StateResetMiddleware())
+
     # Register startup/shutdown handlers
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
 
     # Include routers
+    # IMPORTANT: Order matters! Menu button handlers MUST come before FSM handlers
+    # because FSM handlers have IsNotMenuButton filter that blocks processing.
+
     dp.include_router(start.router)
     dp.include_router(help_handler.router)
 
-    # Common handlers
+    # Common handlers (menu buttons)
+    dp.include_router(favorites.router)
     dp.include_router(statistics.router)
+    dp.include_router(profile.router)
+    dp.include_router(chat.router)
 
-    # Resume handlers (order matters - creation before management)
-    dp.include_router(resume_creation.router)
-    dp.include_router(resume_completion.router)
-    dp.include_router(resume_finalize.router)
-    dp.include_router(resume_handlers.router)
-
-    # Vacancy handlers (order matters - creation before management)
-    dp.include_router(vacancy_creation.router)
-    dp.include_router(vacancy_completion.router)
-    dp.include_router(vacancy_finalize.router)
-    dp.include_router(vacancy_handlers.router)
-
-    # Search handlers
+    # Search handlers (menu buttons - MUST be before creation handlers!)
     dp.include_router(vacancy_search.router)  # For applicants
     dp.include_router(resume_search.router)   # For employers
 
-    # Response management
-    dp.include_router(response_management.router)  # For employers
-
-    # Recommendations
+    # Recommendations (menu buttons - MUST be before creation handlers!)
     dp.include_router(applicant_recommendations.router)  # For applicants
     dp.include_router(employer_recommendations.router)   # For employers
+
+    # Response management (menu button)
+    dp.include_router(response_management.router)  # For employers
+
+    # Creation/Edit handlers (FSM state handlers - MUST be BEFORE management handlers!)
+    logger.warning("🔥 Including resume_creation router FIRST")
+    dp.include_router(resume_creation.router)
+    logger.warning("🔥 Including resume_completion router")
+    dp.include_router(resume_completion.router)
+    logger.warning("🔥 Including resume_finalize router")
+    dp.include_router(resume_finalize.router)
+    logger.warning("🔥 Including vacancy_creation router")
+    dp.include_router(vacancy_creation.router)
+    logger.warning("🔥 Including vacancy_completion router")
+    dp.include_router(vacancy_completion.router)
+    logger.warning("🔥 Including vacancy_finalize router")
+    dp.include_router(vacancy_finalize.router)
+
+    # Management handlers (have menu buttons - AFTER FSM handlers!)
+    logger.warning("🔥 Including resume_handlers router AFTER creation")
+    dp.include_router(resume_handlers.router)
+    dp.include_router(vacancy_handlers.router)
 
     # Start polling
     try:

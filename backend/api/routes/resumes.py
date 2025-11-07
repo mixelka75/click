@@ -4,15 +4,37 @@ Resume endpoints.
 
 from typing import List, Optional
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query, Body
 from beanie import PydanticObjectId
+from pydantic import BaseModel
 
-from backend.models import Resume, User
+from backend.models import Resume, User, WorkExperience, Education
 from backend.services import telegram_publisher
 from shared.constants import ResumeStatus
 
 
 router = APIRouter()
+
+
+class ResumeCreateRequest(BaseModel):
+    """Request model for creating resume."""
+    user_id: str
+    full_name: str
+    city: str
+    phone: str
+    desired_position: str
+    position_category: str
+    ready_to_relocate: Optional[bool] = False
+    ready_for_business_trips: Optional[bool] = False
+    email: Optional[str] = None
+    desired_salary: Optional[int] = None
+    salary_type: Optional[str] = None
+    work_schedule: Optional[List[str]] = None
+    skills: Optional[List[str]] = None
+    about: Optional[str] = None
+    cuisines: Optional[List[str]] = None
+    work_experience: Optional[List[dict]] = None
+    education: Optional[List[dict]] = None
 
 
 @router.post(
@@ -21,35 +43,73 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
     summary="Create new resume"
 )
-async def create_resume(
-    user_id: PydanticObjectId,
-    full_name: str,
-    city: str,
-    phone: str,
-    desired_position: str,
-    position_category: str,
-    **kwargs
-):
+async def create_resume(request: ResumeCreateRequest):
     """Create a new resume."""
     # Check if user exists
-    user = await User.get(user_id)
+    user = await User.get(PydanticObjectId(request.user_id))
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
 
-    resume = Resume(
-        user=user,
-        full_name=full_name,
-        city=city,
-        phone=phone,
-        desired_position=desired_position,
-        position_category=position_category,
-        **kwargs
-    )
-    await resume.insert()
-    return resume
+    resume_data = request.dict(exclude={"user_id"})
+
+    # Convert work_experience dicts to WorkExperience objects
+    if resume_data.get("work_experience"):
+        try:
+            resume_data["work_experience"] = [
+                WorkExperience(**exp) for exp in resume_data["work_experience"]
+            ]
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid work experience data: {str(e)}"
+            )
+    else:
+        resume_data["work_experience"] = []
+
+    # Convert education dicts to Education objects
+    if resume_data.get("education"):
+        try:
+            resume_data["education"] = [
+                Education(**edu) for edu in resume_data["education"]
+            ]
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid education data: {str(e)}"
+            )
+    else:
+        resume_data["education"] = []
+
+    # Ensure all list fields are not None
+    list_fields = ["work_schedule", "skills", "cuisines"]
+    for field in list_fields:
+        if resume_data.get(field) is None:
+            if field == "cuisines":
+                resume_data.pop(field, None)  # Remove cuisines if None
+            else:
+                resume_data[field] = []
+
+    # Ensure boolean fields have defaults
+    bool_fields = ["ready_to_relocate", "ready_for_business_trips"]
+    for field in bool_fields:
+        if resume_data.get(field) is None:
+            resume_data[field] = False
+
+    try:
+        resume = Resume(
+            user=user,
+            **resume_data
+        )
+        await resume.insert()
+        return resume
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to create resume: {str(e)}"
+        )
 
 
 @router.get(

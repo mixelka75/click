@@ -3,6 +3,7 @@ Vacancy creation handlers - Part 3: Description, Preview, Publish.
 """
 
 from aiogram import Router, F
+from bot.filters import IsNotMenuButton
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from loguru import logger
@@ -15,6 +16,7 @@ from config.settings import settings
 
 
 router = Router()
+router.message.filter(IsNotMenuButton())
 
 
 async def ask_description(message: Message, state: FSMContext):
@@ -295,10 +297,32 @@ async def process_publish_cancel(callback: CallbackQuery, state: FSMContext):
     """Handle publish cancellation."""
     await callback.answer()
 
-    await callback.message.edit_text(
-        "❌ Создание вакансии отменено.\n\n"
-        "Вы можете начать заново в любое время."
-    )
+    # Check if this is first vacancy creation
+    data = await state.get_data()
+    is_first_vacancy = data.get("first_vacancy", False)
+
+    if is_first_vacancy:
+        # Delete user and return to role selection
+        from backend.models import User
+        telegram_id = callback.from_user.id
+        user = await User.find_one(User.telegram_id == telegram_id)
+        if user:
+            await user.delete()
+            logger.info(f"Deleted user {telegram_id} after canceling first vacancy")
+
+        from bot.keyboards.common import get_role_selection_keyboard
+        welcome_text = (
+            "👋 <b>Добро пожаловать в CLICK!</b>\n\n"
+            "🎯 <b>CLICK</b> — это сервис для поиска работы и сотрудников в сфере HoReCa "
+            "(рестораны, бары, кафе, гостиницы).\n\n"
+            "Выберите, кто вы:"
+        )
+        await callback.message.edit_text(welcome_text, reply_markup=get_role_selection_keyboard())
+    else:
+        await callback.message.edit_text(
+            "❌ Создание вакансии отменено.\n\n"
+            "Вы можете начать заново в любое время."
+        )
 
     # Clear state
     await state.clear()

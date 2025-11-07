@@ -21,6 +21,7 @@ class VacancySearchStates(StatesGroup):
     # Filters
     select_city = State()
     enter_salary_min = State()
+    enter_filter_value = State()
 
     # Results
     view_results = State()

@@ -12,6 +12,7 @@ from .positions import (
     SUPPORT_POSITIONS,
     ALL_POSITIONS,
     POSITION_CATEGORY_NAMES,
+    POSITION_CATEGORIES,
     get_position_category,
     get_all_positions_flat,
 )
@@ -66,6 +67,7 @@ __all__ = [
     "SUPPORT_POSITIONS",
     "ALL_POSITIONS",
     "POSITION_CATEGORY_NAMES",
+    "POSITION_CATEGORIES",
     "get_position_category",
     "get_all_positions_flat",
     # Cuisines

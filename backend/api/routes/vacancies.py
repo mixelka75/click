@@ -6,6 +6,7 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, status, Query
 from beanie import PydanticObjectId
+from pydantic import BaseModel
 
 from backend.models import Vacancy, User
 from backend.services import telegram_publisher
@@ -15,55 +16,95 @@ from shared.constants import VacancyStatus
 router = APIRouter()
 
 
+class VacancyCreateRequest(BaseModel):
+    """Request model for creating vacancy."""
+    user_id: str
+    position: str
+    position_category: str
+    company_name: str
+    company_type: str
+    company_description: Optional[str] = None
+    company_size: Optional[str] = None
+    company_website: Optional[str] = None
+    city: str
+    address: Optional[str] = None
+    nearest_metro: Optional[str] = None
+    salary_min: Optional[int] = None
+    salary_max: Optional[int] = None
+    salary_type: Optional[str] = None
+    employment_type: str
+    work_schedule: Optional[List[str]] = None
+    required_experience: str
+    required_education: str
+    required_skills: Optional[List[str]] = None
+    has_employment_contract: Optional[bool] = False
+    has_probation_period: Optional[bool] = False
+    probation_duration: Optional[int] = None
+    allows_remote_work: Optional[bool] = False
+    benefits: Optional[List[str]] = None
+    required_documents: Optional[List[str]] = None
+    description: Optional[str] = None
+    responsibilities: Optional[List[str]] = None
+    contact_person_name: Optional[str] = None
+    contact_person_position: Optional[str] = None
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    is_anonymous: Optional[bool] = False
+    publication_duration_days: Optional[int] = 30
+    cuisines: Optional[List[str]] = None
+
+
 @router.post(
     "/vacancies",
     response_model=Vacancy,
     status_code=status.HTTP_201_CREATED,
     summary="Create new vacancy"
 )
-async def create_vacancy(
-    user_id: PydanticObjectId,
-    position: str,
-    position_category: str,
-    company_name: str,
-    company_type: str,
-    city: str,
-    address: str,
-    employment_type: str,
-    required_experience: str,
-    required_education: str,
-    **kwargs
-):
+async def create_vacancy(request: VacancyCreateRequest):
     """Create a new vacancy."""
     # Check if user exists
-    user = await User.get(user_id)
+    user = await User.get(PydanticObjectId(request.user_id))
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
 
+    vacancy_data = request.dict(exclude={"user_id"})
+
     # Set expiration date
-    publication_duration = kwargs.pop("publication_duration_days", 30)
+    publication_duration = vacancy_data.pop("publication_duration_days", 30)
     expires_at = datetime.utcnow() + timedelta(days=publication_duration)
 
-    vacancy = Vacancy(
-        user=user,
-        position=position,
-        position_category=position_category,
-        company_name=company_name,
-        company_type=company_type,
-        city=city,
-        address=address,
-        employment_type=employment_type,
-        required_experience=required_experience,
-        required_education=required_education,
-        publication_duration_days=publication_duration,
-        expires_at=expires_at,
-        **kwargs
-    )
-    await vacancy.insert()
-    return vacancy
+    # Ensure all list fields are not None
+    list_fields = ["work_schedule", "required_skills", "benefits", "required_documents", "responsibilities", "cuisines"]
+    for field in list_fields:
+        if vacancy_data.get(field) is None:
+            if field == "cuisines":
+                vacancy_data.pop(field, None)  # Remove cuisines if None
+            else:
+                vacancy_data[field] = []
+
+    # Ensure boolean fields have defaults
+    bool_fields = ["has_employment_contract", "has_probation_period", "allows_remote_work", "is_anonymous"]
+    for field in bool_fields:
+        if vacancy_data.get(field) is None:
+            vacancy_data[field] = False
+
+    try:
+        vacancy = Vacancy(
+            user=user,
+            publication_duration_days=publication_duration,
+            expires_at=expires_at,
+            **vacancy_data
+        )
+        await vacancy.insert()
+        return vacancy
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to create vacancy: {str(e)}"
+        )
 
 
 @router.get(

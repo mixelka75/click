@@ -20,15 +20,18 @@ def get_main_menu_applicant() -> ReplyKeyboardMarkup:
     """Main menu for applicants."""
     builder = ReplyKeyboardBuilder()
     builder.row(
+        KeyboardButton(text="🔍 Искать работу")
+    )
+    builder.row(
         KeyboardButton(text="📝 Создать резюме"),
         KeyboardButton(text="📋 Мои резюме")
     )
     builder.row(
-        KeyboardButton(text="🔍 Найти вакансию"),
-        KeyboardButton(text="📬 Мои отклики")
+        KeyboardButton(text="📬 Мои отклики"),
+        KeyboardButton(text="⭐ Избранное")
     )
     builder.row(
-        KeyboardButton(text="💡 Рекомендации"),
+        KeyboardButton(text="💬 Сообщения"),
         KeyboardButton(text="📊 Моя статистика")
     )
     builder.row(
@@ -42,15 +45,18 @@ def get_main_menu_employer() -> ReplyKeyboardMarkup:
     """Main menu for employers."""
     builder = ReplyKeyboardBuilder()
     builder.row(
+        KeyboardButton(text="🔍 Искать сотрудников")
+    )
+    builder.row(
         KeyboardButton(text="📝 Создать вакансию"),
         KeyboardButton(text="📋 Мои вакансии")
     )
     builder.row(
         KeyboardButton(text="📬 Управление откликами"),
-        KeyboardButton(text="🔍 Найти резюме")
+        KeyboardButton(text="⭐ Избранное")
     )
     builder.row(
-        KeyboardButton(text="💡 Рекомендованные кандидаты"),
+        KeyboardButton(text="💬 Сообщения"),
         KeyboardButton(text="📊 Моя статистика")
     )
     builder.row(
@@ -77,10 +83,17 @@ def get_skip_button() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_present_time_button() -> InlineKeyboardMarkup:
+    """Button for 'working till present'."""
+    builder = InlineKeyboardBuilder()
+    builder.add(InlineKeyboardButton(text="⏩ По настоящее время", callback_data="skip"))
+    return builder.as_markup()
+
+
 def get_cancel_keyboard() -> ReplyKeyboardMarkup:
-    """Cancel button."""
+    """Cancel button with warning."""
     builder = ReplyKeyboardBuilder()
-    builder.add(KeyboardButton(text="❌ Отменить"))
+    builder.add(KeyboardButton(text="🚫 Отменить создание"))
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -89,7 +102,7 @@ def get_back_cancel_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.row(
         KeyboardButton(text="◀️ Назад"),
-        KeyboardButton(text="❌ Отменить")
+        KeyboardButton(text="🚫 Отменить создание")
     )
     return builder.as_markup(resize_keyboard=True)
 

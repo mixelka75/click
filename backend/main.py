@@ -10,7 +10,7 @@ import sys
 
 from config.settings import settings
 from backend.database import mongodb
-from backend.api.routes import health, users, resumes, vacancies, responses, analytics, recommendations
+from backend.api.routes import health, users, resumes, vacancies, responses, analytics, recommendations, auth, favorites, chats
 from backend.services.notification_service import notification_service
 
 
@@ -88,12 +88,15 @@ app.add_middleware(
 
 # Include routers
 app.include_router(health.router, prefix=settings.api_prefix, tags=["Health"])
+app.include_router(auth.router, prefix=settings.api_prefix, tags=["Authentication"])
 app.include_router(users.router, prefix=settings.api_prefix, tags=["Users"])
 app.include_router(resumes.router, prefix=settings.api_prefix, tags=["Resumes"])
 app.include_router(vacancies.router, prefix=settings.api_prefix, tags=["Vacancies"])
 app.include_router(responses.router, prefix=settings.api_prefix, tags=["Responses"])
 app.include_router(analytics.router, prefix=settings.api_prefix, tags=["Analytics"])
 app.include_router(recommendations.router, prefix=settings.api_prefix, tags=["Recommendations"])
+app.include_router(favorites.router, prefix=settings.api_prefix, tags=["Favorites"])
+app.include_router(chats.router, prefix=settings.api_prefix, tags=["Chats"])
 
 
 @app.get("/")

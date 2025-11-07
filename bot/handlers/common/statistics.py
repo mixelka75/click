@@ -6,10 +6,9 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from loguru import logger
-import httpx
 
-from config.settings import settings
-from bot.utils.auth import get_user_token
+from backend.models import User, Resume, Vacancy, Response
+from shared.constants import UserRole, ResponseStatus
 
 router = Router()
 
@@ -18,49 +17,106 @@ router = Router()
 async def show_statistics(message: Message, state: FSMContext):
     """Show user statistics."""
     try:
-        token = await get_user_token(state)
-        if not token:
-            await message.answer("Ошибка авторизации. Используйте /start для входа.")
+        telegram_id = message.from_user.id
+        user = await User.find_one(User.telegram_id == telegram_id)
+
+        if not user:
+            await message.answer("Пользователь не найден. Используйте /start для регистрации.")
             return
 
-        async with httpx.AsyncClient() as client:
-            # Get user info to determine role
-            user_response = await client.get(
-                f"{settings.api_url}/users/me",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10.0
-            )
-
-            if user_response.status_code != 200:
-                await message.answer("Не удалось получить данные профиля.")
-                return
-
-            user_data = user_response.json()
-            role = user_data.get("role")
-
-            # Get user statistics
-            stats_response = await client.get(
-                f"{settings.api_url}/analytics/my-statistics",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10.0
-            )
-
-            if stats_response.status_code != 200:
-                await message.answer("Не удалось загрузить статистику.")
-                return
-
-            stats = stats_response.json()
-
-            if role == "applicant":
-                await show_applicant_statistics(message, stats)
-            elif role == "employer":
-                await show_employer_statistics(message, stats)
-            else:
-                await message.answer("Неизвестная роль пользователя.")
+        # Calculate statistics based on role
+        if user.role == UserRole.APPLICANT:
+            stats = await calculate_applicant_statistics(user)
+            await show_applicant_statistics(message, stats)
+        elif user.role == UserRole.EMPLOYER:
+            stats = await calculate_employer_statistics(user)
+            await show_employer_statistics(message, stats)
+        else:
+            await message.answer("Неизвестная роль пользователя.")
 
     except Exception as e:
         logger.error(f"Error showing statistics: {e}")
         await message.answer("Произошла ошибка при загрузке статистики.")
+
+
+async def calculate_applicant_statistics(user: User) -> dict:
+    """Calculate statistics for applicant."""
+    # Get all resumes
+    resumes = await Resume.find({"user.$id": user.id}).to_list()
+
+    total_views = sum(r.views_count for r in resumes)
+    published_resumes = len([r for r in resumes if r.is_published])
+
+    # Get all responses where user is applicant
+    responses = await Response.find(Response.applicant.id == user.id).to_list()
+
+    applications_sent = len([r for r in responses if not r.is_invitation])
+    invitations_received = len([r for r in responses if r.is_invitation])
+
+    accepted_count = len([r for r in responses if r.status == ResponseStatus.ACCEPTED])
+    invited_count = len([r for r in responses if r.status == ResponseStatus.INVITED])
+    rejected_count = len([r for r in responses if r.status == ResponseStatus.REJECTED])
+
+    success_rate = round((accepted_count + invited_count) / len(responses) * 100, 1) if responses else 0
+    avg_views_per_resume = round(total_views / len(resumes), 1) if resumes else 0
+
+    return {
+        "resumes_count": len(resumes),
+        "published_resumes": published_resumes,
+        "total_views": total_views,
+        "avg_views_per_resume": avg_views_per_resume,
+        "total_responses": len(responses),
+        "applications_sent": applications_sent,
+        "invitations_received": invitations_received,
+        "accepted_count": accepted_count,
+        "invited_count": invited_count,
+        "rejected_count": rejected_count,
+        "success_rate": success_rate,
+    }
+
+
+async def calculate_employer_statistics(user: User) -> dict:
+    """Calculate statistics for employer."""
+    # Get all vacancies
+    vacancies = await Vacancy.find({"user.$id": user.id}).to_list()
+
+    total_views = sum(v.views_count for v in vacancies)
+    published_vacancies = len([v for v in vacancies if v.is_published])
+    active_vacancies = len([v for v in vacancies if v.status == "active"])
+
+    # Get all responses for employer's vacancies
+    vacancy_ids = [v.id for v in vacancies]
+    all_responses = []
+    for vacancy_id in vacancy_ids:
+        resp_list = await Response.find(Response.vacancy.id == vacancy_id).to_list()
+        all_responses.extend(resp_list)
+    responses = all_responses
+
+    pending_responses = len([r for r in responses if r.status == ResponseStatus.PENDING])
+    accepted_count = len([r for r in responses if r.status == ResponseStatus.ACCEPTED])
+    invited_count = len([r for r in responses if r.status == ResponseStatus.INVITED])
+    rejected_count = len([r for r in responses if r.status == ResponseStatus.REJECTED])
+
+    avg_views_per_vacancy = round(total_views / len(vacancies), 1) if vacancies else 0
+    avg_responses_per_vacancy = round(len(responses) / len(vacancies), 1) if vacancies else 0
+    conversion_rate = round(len(responses) / total_views * 100, 1) if total_views else 0
+    response_rate = round((accepted_count + invited_count) / len(responses) * 100, 1) if responses else 0
+
+    return {
+        "vacancies_count": len(vacancies),
+        "published_vacancies": published_vacancies,
+        "active_vacancies": active_vacancies,
+        "total_views": total_views,
+        "avg_views_per_vacancy": avg_views_per_vacancy,
+        "total_responses": len(responses),
+        "avg_responses_per_vacancy": avg_responses_per_vacancy,
+        "pending_responses": pending_responses,
+        "accepted_count": accepted_count,
+        "invited_count": invited_count,
+        "rejected_count": rejected_count,
+        "conversion_rate": conversion_rate,
+        "response_rate": response_rate,
+    }
 
 
 async def show_applicant_statistics(message: Message, stats: dict):
@@ -113,202 +169,4 @@ async def show_employer_statistics(message: Message, stats: dict):
     await message.answer(text)
 
 
-@router.message(F.text.in_(["📊 Статистика резюме", "📊 Статистика вакансии"]))
-async def show_item_statistics_menu(message: Message, state: FSMContext):
-    """Show menu to select resume or vacancy for detailed statistics."""
-    try:
-        token = await get_user_token(state)
-        if not token:
-            await message.answer("Ошибка авторизации. Используйте /start для входа.")
-            return
-
-        is_resume = "резюме" in message.text.lower()
-
-        async with httpx.AsyncClient() as client:
-            if is_resume:
-                response = await client.get(
-                    f"{settings.api_url}/resumes/my",
-                    headers={"Authorization": f"Bearer {token}"},
-                    timeout=10.0
-                )
-                item_type = "resume"
-                item_name = "резюме"
-            else:
-                response = await client.get(
-                    f"{settings.api_url}/vacancies/my",
-                    headers={"Authorization": f"Bearer {token}"},
-                    timeout=10.0
-                )
-                item_type = "vacancy"
-                item_name = "вакансию"
-
-            if response.status_code != 200:
-                await message.answer(f"Не удалось загрузить список {item_name}.")
-                return
-
-            items = response.json()
-
-            if not items:
-                await message.answer(f"У вас пока нет {item_name}.")
-                return
-
-            # Create inline keyboard with items
-            from aiogram.utils.keyboard import InlineKeyboardBuilder
-            from aiogram.types import InlineKeyboardButton
-
-            builder = InlineKeyboardBuilder()
-
-            for item in items[:10]:  # Limit to 10 items
-                position = item.get("desired_position" if is_resume else "position", "Без названия")
-                item_id = item.get("id")
-                builder.row(
-                    InlineKeyboardButton(
-                        text=f"📊 {position[:40]}",
-                        callback_data=f"stats_{item_type}:{item_id}"
-                    )
-                )
-
-            await message.answer(
-                f"Выберите {item_name} для просмотра детальной статистики:",
-                reply_markup=builder.as_markup()
-            )
-
-    except Exception as e:
-        logger.error(f"Error showing item statistics menu: {e}")
-        await message.answer("Произошла ошибка при загрузке списка.")
-
-
-@router.callback_query(F.data.startswith("stats_resume:"))
-async def show_resume_detailed_statistics(callback: CallbackQuery, state: FSMContext):
-    """Show detailed statistics for a specific resume."""
-    try:
-        await callback.answer()
-
-        resume_id = callback.data.split(":")[1]
-        token = await get_user_token(state)
-
-        async with httpx.AsyncClient() as client:
-            # Get resume analytics
-            response = await client.get(
-                f"{settings.api_url}/analytics/resume/{resume_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10.0
-            )
-
-            if response.status_code != 200:
-                await callback.message.answer("Не удалось загрузить статистику резюме.")
-                return
-
-            analytics = response.json()
-
-            text = f"📊 <b>Статистика резюме</b>\n\n"
-            text += f"<b>{analytics.get('position', 'Резюме')}</b>\n\n"
-
-            text += f"📅 Активно: {analytics.get('days_active', 0)} дн.\n"
-            text += f"👀 Просмотров: {analytics.get('views_count', 0)}\n"
-            text += f"📬 Откликов: {analytics.get('responses_count', 0)}\n\n"
-
-            text += f"📊 <b>Детализация откликов:</b>\n"
-            text += f"   • Отправлено заявок: {analytics.get('applications_count', 0)}\n"
-            text += f"   • Получено приглашений: {analytics.get('invitations_count', 0)}\n\n"
-
-            responses_by_status = analytics.get('responses_by_status', {})
-            text += f"📈 <b>По статусам:</b>\n"
-            text += f"   • В ожидании: {responses_by_status.get('pending', 0)}\n"
-            text += f"   • Просмотрено: {responses_by_status.get('viewed', 0)}\n"
-            text += f"   • Приглашено: {responses_by_status.get('invited', 0)}\n"
-            text += f"   • Принято: {responses_by_status.get('accepted', 0)}\n"
-            text += f"   • Отклонено: {responses_by_status.get('rejected', 0)}\n\n"
-
-            text += f"🎯 <b>Эффективность:</b>\n"
-            text += f"   • Процент приглашений: {analytics.get('invitation_rate', 0)}%\n"
-            text += f"   • Процент успеха: {analytics.get('success_rate', 0)}%\n"
-
-            if analytics.get('published_at'):
-                from datetime import datetime
-                pub_date = analytics['published_at']
-                if isinstance(pub_date, str):
-                    try:
-                        pub_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
-                        text += f"\n📅 Опубликовано: {pub_date.strftime('%d.%m.%Y %H:%M')}"
-                    except:
-                        pass
-
-            await callback.message.answer(text)
-
-    except Exception as e:
-        logger.error(f"Error showing resume statistics: {e}")
-        await callback.message.answer("Произошла ошибка при загрузке статистики.")
-
-
-@router.callback_query(F.data.startswith("stats_vacancy:"))
-async def show_vacancy_detailed_statistics(callback: CallbackQuery, state: FSMContext):
-    """Show detailed statistics for a specific vacancy."""
-    try:
-        await callback.answer()
-
-        vacancy_id = callback.data.split(":")[1]
-        token = await get_user_token(state)
-
-        async with httpx.AsyncClient() as client:
-            # Get vacancy analytics
-            response = await client.get(
-                f"{settings.api_url}/analytics/vacancy/{vacancy_id}",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10.0
-            )
-
-            if response.status_code != 200:
-                await callback.message.answer("Не удалось загрузить статистику вакансии.")
-                return
-
-            analytics = response.json()
-
-            text = f"📊 <b>Статистика вакансии</b>\n\n"
-            text += f"<b>{analytics.get('position', 'Вакансия')}</b>\n\n"
-
-            text += f"📅 Активна: {analytics.get('days_active', 0)} дн.\n"
-            text += f"👀 Просмотров: {analytics.get('views_count', 0)}\n"
-            text += f"📬 Откликов: {analytics.get('responses_count', 0)}\n\n"
-
-            responses_by_status = analytics.get('responses_by_status', {})
-            text += f"📈 <b>Отклики по статусам:</b>\n"
-            text += f"   • В ожидании: {responses_by_status.get('pending', 0)}\n"
-            text += f"   • Просмотрено: {responses_by_status.get('viewed', 0)}\n"
-            text += f"   • Приглашено: {responses_by_status.get('invited', 0)}\n"
-            text += f"   • Принято: {responses_by_status.get('accepted', 0)}\n"
-            text += f"   • Отклонено: {responses_by_status.get('rejected', 0)}\n\n"
-
-            text += f"🎯 <b>Эффективность:</b>\n"
-            text += f"   • Конверсия просмотры→отклики: {analytics.get('conversion_rate', 0)}%\n"
-            text += f"   • Процент принятия откликов: {analytics.get('response_rate', 0)}%\n"
-
-            avg_time = analytics.get('avg_response_time_hours')
-            if avg_time is not None:
-                text += f"   • Среднее время до отклика: {avg_time:.1f} ч.\n"
-
-            if analytics.get('published_at'):
-                from datetime import datetime
-                pub_date = analytics['published_at']
-                if isinstance(pub_date, str):
-                    try:
-                        pub_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
-                        text += f"\n📅 Опубликовано: {pub_date.strftime('%d.%m.%Y %H:%M')}"
-                    except:
-                        pass
-
-            if analytics.get('expires_at'):
-                from datetime import datetime
-                exp_date = analytics['expires_at']
-                if isinstance(exp_date, str):
-                    try:
-                        exp_date = datetime.fromisoformat(exp_date.replace('Z', '+00:00'))
-                        text += f"\n⏰ Истекает: {exp_date.strftime('%d.%m.%Y %H:%M')}"
-                    except:
-                        pass
-
-            await callback.message.answer(text)
-
-    except Exception as e:
-        logger.error(f"Error showing vacancy statistics: {e}")
-        await callback.message.answer("Произошла ошибка при загрузке статистики.")
+# Detailed statistics functions removed - can be added later if needed

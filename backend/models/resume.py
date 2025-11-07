@@ -12,8 +12,8 @@ from .user import User
 
 class WorkExperience(BaseModel):
     """Work experience entry."""
-    start_date: date
-    end_date: Optional[date] = None  # None means "present"
+    start_date: Optional[str] = None  # Format: "ММ.ГГГГ" or empty
+    end_date: Optional[str] = None  # Format: "ММ.ГГГГ" or "по настоящее время"
     company: str
     position: str
     responsibilities: Optional[str] = None
@@ -22,7 +22,7 @@ class WorkExperience(BaseModel):
 
 class Education(BaseModel):
     """Education entry."""
-    level: EducationLevel
+    level: Optional[str] = None  # Changed to string for flexibility
     institution: str
     faculty: Optional[str] = None
     specialization: Optional[str] = None
@@ -71,6 +71,9 @@ class Resume(Document):
     email: Optional[str] = None
     telegram: Optional[str] = None
     other_contacts: Optional[str] = None
+
+    # Photo
+    photo_file_id: Optional[str] = None  # Telegram file_id for photo
 
     # Position and salary
     desired_position: str

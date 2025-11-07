@@ -10,6 +10,7 @@ from loguru import logger
 import httpx
 
 from bot.states.resume_states import ResumeCreationStates
+from bot.filters import IsNotMenuButton
 from bot.keyboards.positions import (
     get_position_categories_keyboard,
     get_positions_keyboard,
@@ -19,6 +20,7 @@ from bot.keyboards.positions import (
 )
 from bot.keyboards.common import (
     get_cancel_keyboard,
+    get_back_cancel_keyboard,
     get_yes_no_keyboard,
     get_skip_button,
     get_confirm_publish_keyboard,
@@ -36,48 +38,25 @@ from shared.constants import (
 from config.settings import settings
 
 
+from bot.utils.cancel_handlers import handle_cancel_resume
+
+
 router = Router()
+# ВОССТАНОВЛЕНО: фильтр, блокирующий обработку меню-кнопок FSM хендлерами
+router.message.filter(IsNotMenuButton())
 
-
-# ============ START RESUME CREATION ============
-
-@router.message(F.text == "📝 Создать резюме")
-async def start_resume_creation(message: Message, state: FSMContext):
-    """Start resume creation process."""
-    telegram_id = message.from_user.id
-    user = await User.find_one(User.telegram_id == telegram_id)
-
-    if not user or user.role != UserRole.APPLICANT:
-        await message.answer("Эта функция доступна только для соискателей.")
-        return
-
-    logger.info(f"User {telegram_id} started resume creation")
-
-    await state.set_data({})
-
-    welcome_text = (
-        "📝 <b>Создание резюме</b>\n\n"
-        "Отлично! Давайте создадим ваше резюме.\n"
-        "Я буду задавать вам вопросы шаг за шагом.\n\n"
-        "Вы можете в любой момент:\n"
-        "• Использовать /cancel для отмены\n"
-        "• Пропустить необязательные поля\n\n"
-        "Начнём с основной информации.\n\n"
-        "<b>Как вас зовут?</b> (ФИО полностью)"
-    )
-
-    await message.answer(welcome_text, reply_markup=get_cancel_keyboard())
-    await state.set_state(ResumeCreationStates.full_name)
-
+# Удалён DEBUG catch-all хендлер, перехватывавший все текстовые сообщения и ломавший сценарий.
+# Если потребуется локальная отладка, добавьте временный хендлер с более узким фильтром.
 
 # ============ BASIC INFORMATION ============
 
 @router.message(ResumeCreationStates.full_name)
 async def process_full_name(message: Message, state: FSMContext):
     """Process full name."""
-    if message.text == "❌ Отменить":
-        await state.clear()
-        await message.answer("Создание резюме отменено.")
+    logger.warning(f"🔥 process_full_name CALLED! user={message.from_user.id}, text='{message.text}'")
+
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
         return
 
     full_name = message.text.strip()
@@ -89,7 +68,8 @@ async def process_full_name(message: Message, state: FSMContext):
     await message.answer(
         f"Отлично, {full_name}!\n\n"
         f"<b>В каком городе вы находитесь?</b>\n"
-        f"Например: Москва, Санкт-Петербург, Казань..."
+        f"Например: Москва, Санкт-Петербург, Казань...",
+        reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.city)
 
@@ -97,9 +77,17 @@ async def process_full_name(message: Message, state: FSMContext):
 @router.message(ResumeCreationStates.city)
 async def process_city(message: Message, state: FSMContext):
     """Process city."""
-    if message.text == "❌ Отменить":
-        await state.clear()
-        await message.answer("Создание резюме отменено.")
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        # Return to full name
+        await message.answer(
+            "<b>Как вас зовут?</b> (ФИО полностью)",
+            reply_markup=get_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.full_name)
         return
 
     city = message.text.strip()
@@ -128,6 +116,24 @@ async def process_relocate(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ResumeCreationStates.ready_for_business_trips)
 
 
+@router.message(ResumeCreationStates.ready_to_relocate)
+async def process_relocate_text(message: Message, state: FSMContext):
+    """Handle text input on relocate question (back button)."""
+    if message.text == "◀️ Назад":
+        data = await state.get_data()
+        await message.answer(
+            f"<b>В каком городе вы находитесь?</b>\n"
+            f"Например: Москва, Санкт-Петербург, Казань...",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.city)
+        return
+
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+
 @router.callback_query(ResumeCreationStates.ready_for_business_trips, F.data.startswith("confirm:"))
 async def process_business_trips(callback: CallbackQuery, state: FSMContext):
     """Process business trips."""
@@ -140,7 +146,7 @@ async def process_business_trips(callback: CallbackQuery, state: FSMContext):
         f"{'✅ Готов' if ready else '❌ Не готов'} к командировкам\n\n"
         "<b>Укажите ваш номер телефона</b>\n"
         "Формат: +79001234567",
-        reply_markup=get_cancel_keyboard()
+        reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.phone)
 
@@ -148,9 +154,17 @@ async def process_business_trips(callback: CallbackQuery, state: FSMContext):
 @router.message(ResumeCreationStates.phone)
 async def process_phone(message: Message, state: FSMContext):
     """Process phone number."""
-    if message.text == "❌ Отменить":
-        await state.clear()
-        await message.answer("Создание резюме отменено.")
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        # Return to business trips question
+        await message.answer(
+            "<b>Готовы к командировкам?</b>",
+            reply_markup=get_yes_no_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.ready_for_business_trips)
         return
 
     phone = message.text.strip()
@@ -184,9 +198,8 @@ async def process_email(message_or_callback, state: FSMContext):
         message = message_or_callback.message
     else:
         message = message_or_callback
-        if message.text == "❌ Отменить":
-            await state.clear()
-            await message.answer("Создание резюме отменено.")
+        if message.text == "🚫 Отменить создание":
+            await handle_cancel_resume(message, state)
             return
 
         email = message.text.strip()
@@ -221,28 +234,40 @@ async def process_position_category(callback: CallbackQuery, state: FSMContext):
     await state.set_state(ResumeCreationStates.position)
 
 
+@router.callback_query(ResumeCreationStates.position, F.data == "back_to_categories")
+async def back_to_position_categories(callback: CallbackQuery, state: FSMContext):
+    """Go back to position categories."""
+    await callback.answer()
+
+    await callback.message.edit_text(
+        "<b>Какую должность вы ищете?</b>\n\nВыберите категорию:",
+        reply_markup=get_position_categories_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.position_category)
+
+
 @router.callback_query(ResumeCreationStates.position, F.data.startswith("position:"))
 async def process_position(callback: CallbackQuery, state: FSMContext):
     """Process position selection."""
     await callback.answer()
 
-    parts = callback.data.split(":")
-    category = parts[1]
-    position = parts[2] if len(parts) > 2 else ""
-
-    if position == "custom":
-        await callback.message.answer(
-            "Введите название должности:",
-            reply_markup=get_cancel_keyboard()
-        )
-        # Stay in same state to get custom input
+    # Extract position from callback data
+    # Format: "position:position_name"
+    parts = callback.data.split(":", 1)
+    if len(parts) < 2:
+        await callback.answer("Ошибка выбора должности", show_alert=True)
         return
+
+    position = parts[1]
 
     await state.update_data(desired_position=position)
 
+    # Get category from state
+    data = await state.get_data()
+    category = data.get("position_category")
+
     # If cook, ask for cuisines
     if category == "cook":
-        data = await state.get_data()
         await callback.message.answer(
             "<b>Выберите типы кухонь, с которыми работаете:</b>\n"
             "(можно выбрать несколько)",
@@ -300,5 +325,3 @@ async def process_cuisines(callback: CallbackQuery, state: FSMContext):
         reply_markup=get_cuisines_keyboard(cuisines)
     )
 
-
-# Continued in next part...

@@ -111,6 +111,14 @@ class Settings(BaseSettings):
         """Check if running in development."""
         return self.environment.lower() == "development"
 
+    @property
+    def api_url(self) -> str:
+        """Construct API URL from components."""
+        # In Docker compose, backend service is accessible via 'backend' hostname
+        # In local development, use localhost
+        host = "backend" if self.is_production else "localhost"
+        return f"http://{host}:{self.api_port}{self.api_prefix}"
+
 
 # Global settings instance
 settings = Settings()

@@ -3,6 +3,7 @@ Vacancy creation handlers - Part 2: Salary, Requirements, Employment Terms, Bene
 """
 
 from aiogram import Router, F
+from bot.filters import IsNotMenuButton
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from loguru import logger
@@ -13,6 +14,7 @@ from shared.constants import SalaryType
 
 
 router = Router()
+router.message.filter(IsNotMenuButton())
 
 
 async def ask_salary_min(message: Message, state: FSMContext):

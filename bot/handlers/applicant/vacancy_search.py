@@ -21,6 +21,7 @@ router = Router()
 @router.message(F.text == "🔍 Найти вакансию")
 async def start_vacancy_search(message: Message, state: FSMContext):
     """Start vacancy search."""
+    logger.info(f"HANDLER: start_vacancy_search called by {message.from_user.id}")
     telegram_id = message.from_user.id
     user = await User.find_one(User.telegram_id == telegram_id)
 
@@ -33,7 +34,8 @@ async def start_vacancy_search(message: Message, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📂 По категории", callback_data="search_method:category")],
         [InlineKeyboardButton(text="🔎 Поиск по тексту", callback_data="search_method:text")],
-        [InlineKeyboardButton(text="📋 Все вакансии", callback_data="search_method:all")]
+        [InlineKeyboardButton(text="📋 Все вакансии", callback_data="search_method:all")],
+        [InlineKeyboardButton(text="🔧 Фильтры", callback_data="search_filters:show")]
     ])
 
     await message.answer(
@@ -126,45 +128,82 @@ async def process_text_query(message: Message, state: FSMContext):
 async def show_vacancy_results(message: Message, state: FSMContext, search_params: dict):
     """Show vacancy search results."""
     try:
-        async with httpx.AsyncClient() as client:
-            # Build API URL
-            url = f"http://backend:8000{settings.api_prefix}/vacancies/search"
+        from backend.models import Vacancy
+        from datetime import datetime
+        from shared.constants import VacancyStatus
 
-            response = await client.get(
-                url,
-                params=search_params,
-                timeout=10.0
+        # Build MongoDB query
+        query = {
+            "status": VacancyStatus.ACTIVE,
+            "is_published": True,
+            "expires_at": {"$gt": datetime.utcnow()}
+        }
+
+        # Add search filters
+        if "q" in search_params:
+            # Full-text search
+            q = search_params["q"]
+            query["$or"] = [
+                {"position": {"$regex": q, "$options": "i"}},
+                {"description": {"$regex": q, "$options": "i"}},
+                {"company_name": {"$regex": q, "$options": "i"}},
+            ]
+
+        if "position" in search_params:
+            query["position"] = {"$regex": search_params["position"], "$options": "i"}
+
+        if "category" in search_params:
+            query["position_category"] = search_params["category"]
+
+        if "city" in search_params:
+            query["city"] = {"$regex": search_params["city"], "$options": "i"}
+
+        # Salary filters
+        if "salary_min" in search_params or "salary_max" in search_params:
+            salary_query = {}
+            if "salary_min" in search_params:
+                # Vacancy salary_max should be >= user's min requirement
+                salary_query["$gte"] = search_params["salary_min"]
+            if "salary_max" in search_params:
+                # Vacancy salary_min should be <= user's max requirement
+                salary_query["$lte"] = search_params["salary_max"]
+
+            if salary_query:
+                query["$or"] = [
+                    {"salary_max": salary_query},
+                    {"salary_min": salary_query}
+                ]
+
+        # Schedule filter
+        if "schedule" in search_params:
+            query["work_schedule"] = {"$in": [search_params["schedule"]]}
+
+        # Skills filter
+        if "skills" in search_params:
+            query["required_skills"] = {"$in": search_params["skills"]}
+
+        # Get vacancies from MongoDB
+        vacancies = await Vacancy.find(query).limit(20).to_list()
+
+        if not vacancies:
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_search")]
+            ])
+
+            await message.answer(
+                "😔 <b>Вакансии не найдены</b>\n\n"
+                "По вашему запросу нет активных вакансий.\n"
+                "Попробуйте изменить параметры поиска.",
+                reply_markup=keyboard
             )
+            await state.clear()
+            return
 
-            if response.status_code == 200:
-                vacancies = response.json()
+        # Save vacancies to state
+        await state.update_data(vacancies=vacancies, current_index=0)
 
-                if not vacancies:
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_search")]
-                    ])
-
-                    await message.answer(
-                        "😔 <b>Вакансии не найдены</b>\n\n"
-                        "По вашему запросу нет активных вакансий.\n"
-                        "Попробуйте изменить параметры поиска.",
-                        reply_markup=keyboard
-                    )
-                    await state.clear()
-                    return
-
-                # Save vacancies to state
-                await state.update_data(vacancies=vacancies, current_index=0)
-
-                # Show first vacancy
-                await show_vacancy_card(message, state, 0)
-
-            else:
-                await message.answer(
-                    "❌ Ошибка при поиске вакансий.\n"
-                    "Попробуйте позже."
-                )
-                await state.clear()
+        # Show first vacancy
+        await show_vacancy_card(message, state, 0)
 
     except Exception as e:
         logger.error(f"Error searching vacancies: {e}")
@@ -202,9 +241,10 @@ async def show_vacancy_card(message: Message, state: FSMContext, index: int):
         buttons.append(nav_buttons)
 
     # Action buttons
+    vacancy_id = str(vacancy.id) if hasattr(vacancy, 'id') else vacancy['id']
     buttons.append([
-        InlineKeyboardButton(text="📋 Подробнее", callback_data=f"vac_details:{vacancy['id']}"),
-        InlineKeyboardButton(text="✉️ Откликнуться", callback_data=f"vac_apply:{vacancy['id']}")
+        InlineKeyboardButton(text="📋 Подробнее", callback_data=f"vac_details:{vacancy_id}"),
+        InlineKeyboardButton(text="✉️ Откликнуться", callback_data=f"vac_apply:{vacancy_id}")
     ])
 
     buttons.append([InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_search")])
@@ -215,43 +255,53 @@ async def show_vacancy_card(message: Message, state: FSMContext, index: int):
     await state.set_state(VacancySearchStates.view_results)
 
 
-def format_vacancy_card(vacancy: dict, index: int, total: int) -> str:
+def format_vacancy_card(vacancy, index: int, total: int) -> str:
     """Format vacancy information for display."""
     lines = [f"📋 <b>Вакансия {index} из {total}</b>\n"]
 
-    lines.append(f"💼 <b>{vacancy.get('position')}</b>")
+    position = vacancy.position if hasattr(vacancy, 'position') else vacancy.get('position')
+    lines.append(f"💼 <b>{position}</b>")
 
-    if vacancy.get('company_name') and not vacancy.get('is_anonymous'):
-        lines.append(f"🏢 {vacancy.get('company_name')}")
+    company_name = vacancy.company_name if hasattr(vacancy, 'company_name') else vacancy.get('company_name')
+    is_anonymous = vacancy.is_anonymous if hasattr(vacancy, 'is_anonymous') else vacancy.get('is_anonymous')
+    if company_name and not is_anonymous:
+        lines.append(f"🏢 {company_name}")
 
-    if vacancy.get('city'):
-        location = vacancy.get('city')
-        if vacancy.get('nearest_metro'):
-            location += f" (🚇 {vacancy.get('nearest_metro')})"
+    city = vacancy.city if hasattr(vacancy, 'city') else vacancy.get('city')
+    if city:
+        location = city
+        nearest_metro = vacancy.nearest_metro if hasattr(vacancy, 'nearest_metro') else vacancy.get('nearest_metro')
+        if nearest_metro:
+            location += f" (🚇 {nearest_metro})"
         lines.append(f"📍 {location}")
 
     # Salary
-    if vacancy.get('salary_min') or vacancy.get('salary_max'):
+    salary_min = vacancy.salary_min if hasattr(vacancy, 'salary_min') else vacancy.get('salary_min')
+    salary_max = vacancy.salary_max if hasattr(vacancy, 'salary_max') else vacancy.get('salary_max')
+    if salary_min or salary_max:
         salary_parts = []
-        if vacancy.get('salary_min'):
-            salary_parts.append(f"от {vacancy['salary_min']:,}")
-        if vacancy.get('salary_max'):
-            salary_parts.append(f"до {vacancy['salary_max']:,}")
+        if salary_min:
+            salary_parts.append(f"от {salary_min:,}")
+        if salary_max:
+            salary_parts.append(f"до {salary_max:,}")
         salary_str = " ".join(salary_parts) + " ₽"
         lines.append(f"💰 {salary_str}")
 
     # Employment type
-    if vacancy.get('employment_type'):
-        lines.append(f"⏰ {vacancy.get('employment_type')}")
+    employment_type = vacancy.employment_type if hasattr(vacancy, 'employment_type') else vacancy.get('employment_type')
+    if employment_type:
+        lines.append(f"⏰ {employment_type}")
 
     # Requirements
-    if vacancy.get('required_experience'):
-        lines.append(f"📊 Опыт: {vacancy.get('required_experience')}")
+    required_experience = vacancy.required_experience if hasattr(vacancy, 'required_experience') else vacancy.get('required_experience')
+    if required_experience:
+        lines.append(f"📊 Опыт: {required_experience}")
 
     # Description preview
-    if vacancy.get('description'):
-        desc = vacancy['description'][:150]
-        if len(vacancy['description']) > 150:
+    description = vacancy.description if hasattr(vacancy, 'description') else vacancy.get('description')
+    if description:
+        desc = description[:150]
+        if len(description) > 150:
             desc += "..."
         lines.append(f"\n{desc}")
 
@@ -290,25 +340,36 @@ async def show_vacancy_details(callback: CallbackQuery, state: FSMContext):
     vacancy_id = callback.data.split(":")[1]
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"http://backend:8000{settings.api_prefix}/vacancies/{vacancy_id}",
-                timeout=10.0
-            )
+        from backend.models import Vacancy
+        from beanie import PydanticObjectId
 
-            if response.status_code == 200:
-                vacancy = response.json()
+        vacancy = await Vacancy.get(PydanticObjectId(vacancy_id))
 
-                text = format_vacancy_details(vacancy)
+        if vacancy:
+            # Increment views count
+            vacancy.views_count += 1
+            await vacancy.save()
 
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="✉️ Откликнуться", callback_data=f"vac_apply:{vacancy_id}")],
-                    [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="back_to_list")]
-                ])
+            text = format_vacancy_details(vacancy)
 
-                await callback.message.answer(text, reply_markup=keyboard)
-            else:
-                await callback.message.answer("❌ Ошибка при загрузке вакансии.")
+            # Check if in favorites
+            from bot.handlers.common.favorites import check_in_favorites
+            telegram_id = callback.from_user.id
+            in_favorites = await check_in_favorites(telegram_id, vacancy_id, "vacancy")
+
+            # Build keyboard with favorites button
+            fav_text = "⭐ Убрать из избранного" if in_favorites else "⭐ В избранное"
+            fav_action = "remove" if in_favorites else "add"
+
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✉️ Откликнуться", callback_data=f"vac_apply:{vacancy_id}")],
+                [InlineKeyboardButton(text=fav_text, callback_data=f"fav:{fav_action}:vacancy:{vacancy_id}")],
+                [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data="back_to_list")]
+            ])
+
+            await callback.message.answer(text, reply_markup=keyboard)
+        else:
+            await callback.message.answer("❌ Вакансия не найдена.")
 
     except Exception as e:
         logger.error(f"Error fetching vacancy details: {e}")
@@ -417,46 +478,44 @@ async def start_application(callback: CallbackQuery, state: FSMContext):
     user = await User.find_one(User.telegram_id == telegram_id)
 
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"http://backend:8000{settings.api_prefix}/resumes/user/{user.id}",
-                timeout=10.0
+        from backend.models import Resume
+
+        resumes_list = await Resume.find({"user.$id": user.id}).to_list()
+
+        # Filter published resumes
+        published_resumes = [r for r in resumes_list if r.is_published]
+
+        if not published_resumes:
+            await callback.message.answer(
+                "❌ <b>Нет опубликованных резюме</b>\n\n"
+                "Создайте и опубликуйте резюме, чтобы откликаться на вакансии."
             )
+            return
 
-            if response.status_code == 200:
-                resumes = response.json()
+        await state.update_data(user_resumes=published_resumes)
 
-                # Filter published resumes
-                published_resumes = [r for r in resumes if r.get('is_published')]
-
-                if not published_resumes:
-                    await callback.message.answer(
-                        "❌ <b>Нет опубликованных резюме</b>\n\n"
-                        "Создайте и опубликуйте резюме, чтобы откликаться на вакансии."
-                    )
-                    return
-
-                await state.update_data(user_resumes=published_resumes)
-
-                # Show resume selection
-                buttons = []
-                for resume in published_resumes:
-                    buttons.append([
-                        InlineKeyboardButton(
-                            text=f"📋 {resume.get('desired_position')} ({resume.get('city')})",
-                            callback_data=f"apply_resume:{resume['id']}"
-                        )
-                    ])
-
-                buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_apply")])
-
-                keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-
-                await callback.message.answer(
-                    "📋 <b>Выберите резюме для отклика:</b>",
-                    reply_markup=keyboard
+        # Show resume selection
+        buttons = []
+        for resume in published_resumes:
+            position = resume.desired_position or "Не указана должность"
+            salary_str = f"{resume.desired_salary:,}₽" if resume.desired_salary else "не указана"
+            button_text = f"📋 {position} | {salary_str} | {resume.city}"
+            buttons.append([
+                InlineKeyboardButton(
+                    text=button_text[:64],
+                    callback_data=f"apply_resume:{str(resume.id)}"
                 )
-                await state.set_state(VacancySearchStates.select_resume)
+            ])
+
+        buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_apply")])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+        await callback.message.answer(
+            "📋 <b>Выберите резюме для отклика:</b>",
+            reply_markup=keyboard
+        )
+        await state.set_state(VacancySearchStates.select_resume)
 
     except Exception as e:
         logger.error(f"Error fetching user resumes: {e}")
@@ -570,3 +629,294 @@ async def new_search(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
     await start_vacancy_search(callback.message, state)
+
+
+# ============================================================================
+# SEARCH FILTERS
+# ============================================================================
+
+@router.callback_query(F.data == "search_filters:show")
+async def show_search_filters(callback: CallbackQuery, state: FSMContext):
+    """Show search filters menu."""
+    await callback.answer()
+
+    data = await state.get_data()
+    filters = data.get("search_filters", {})
+
+    # Format current filters
+    filter_text = ["🔧 <b>Фильтры поиска</b>\n"]
+
+    salary_min = filters.get("salary_min")
+    salary_max = filters.get("salary_max")
+    if salary_min or salary_max:
+        salary_str = ""
+        if salary_min:
+            salary_str += f"от {salary_min:,} ₽"
+        if salary_max:
+            if salary_str:
+                salary_str += " "
+            salary_str += f"до {salary_max:,} ₽"
+        filter_text.append(f"💰 Зарплата: {salary_str}")
+    else:
+        filter_text.append("💰 Зарплата: не установлена")
+
+    schedule = filters.get("schedule")
+    if schedule:
+        filter_text.append(f"⏰ График: {schedule}")
+    else:
+        filter_text.append("⏰ График: не установлен")
+
+    skills = filters.get("skills", [])
+    if skills:
+        filter_text.append(f"🎯 Навыки: {', '.join(skills[:3])}")
+        if len(skills) > 3:
+            filter_text.append(f"   и ещё {len(skills) - 3}")
+    else:
+        filter_text.append("🎯 Навыки: не указаны")
+
+    city = filters.get("city")
+    if city:
+        filter_text.append(f"📍 Город: {city}")
+    else:
+        filter_text.append("📍 Город: не указан")
+
+    text = "\n".join(filter_text)
+
+    # Build keyboard
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+
+    builder.row(
+        InlineKeyboardButton(text="💰 Зарплата", callback_data="filter:salary"),
+        InlineKeyboardButton(text="⏰ График", callback_data="filter:schedule")
+    )
+    builder.row(
+        InlineKeyboardButton(text="🎯 Навыки", callback_data="filter:skills"),
+        InlineKeyboardButton(text="📍 Город", callback_data="filter:city")
+    )
+
+    if filters:
+        builder.row(
+            InlineKeyboardButton(text="🔍 Поиск с фильтрами", callback_data="apply_filters"),
+            InlineKeyboardButton(text="🗑 Сбросить", callback_data="clear_filters")
+        )
+    else:
+        builder.row(
+            InlineKeyboardButton(text="🔍 Поиск с фильтрами", callback_data="apply_filters")
+        )
+
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="filters:back")
+    )
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data == "filter:salary")
+async def set_salary_filter(callback: CallbackQuery, state: FSMContext):
+    """Set salary filter."""
+    await callback.answer()
+
+    await callback.message.edit_text(
+        "💰 <b>Фильтр по зарплате</b>\n\n"
+        "Введите диапазон зарплаты в формате:\n"
+        "<code>от XXXX до YYYY</code>\n\n"
+        "Примеры:\n"
+        "• <code>от 50000</code> - от 50 тыс.\n"
+        "• <code>до 100000</code> - до 100 тыс.\n"
+        "• <code>от 50000 до 100000</code> - диапазон\n\n"
+        "Или отправьте \"-\" чтобы убрать фильтр"
+    )
+    await state.update_data(setting_filter="salary")
+    await state.set_state(VacancySearchStates.enter_filter_value)
+
+
+@router.callback_query(F.data == "filter:schedule")
+async def set_schedule_filter(callback: CallbackQuery, state: FSMContext):
+    """Set schedule filter."""
+    await callback.answer()
+
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    from shared.constants import WORK_SCHEDULES
+
+    builder = InlineKeyboardBuilder()
+
+    # Add schedule options
+    schedules = WORK_SCHEDULES[:6]  # First 6 schedules
+    for schedule in schedules:
+        builder.row(
+            InlineKeyboardButton(text=schedule, callback_data=f"filter_schedule:{schedule}")
+        )
+
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="search_filters:show")
+    )
+
+    await callback.message.edit_text(
+        "⏰ <b>Выберите график работы:</b>",
+        reply_markup=builder.as_markup()
+    )
+
+
+@router.callback_query(F.data.startswith("filter_schedule:"))
+async def process_schedule_filter(callback: CallbackQuery, state: FSMContext):
+    """Process schedule filter selection."""
+    await callback.answer("Фильтр установлен!")
+
+    schedule = callback.data.split(":", 1)[1]
+
+    data = await state.get_data()
+    filters = data.get("search_filters", {})
+    filters["schedule"] = schedule
+    await state.update_data(search_filters=filters)
+
+    # Return to filters menu
+    await show_search_filters(callback, state)
+
+
+@router.callback_query(F.data == "filter:city")
+async def set_city_filter(callback: CallbackQuery, state: FSMContext):
+    """Set city filter."""
+    await callback.answer()
+
+    await callback.message.edit_text(
+        "📍 <b>Фильтр по городу</b>\n\n"
+        "Введите название города:\n"
+        "Пример: Москва\n\n"
+        "Или отправьте \"-\" чтобы убрать фильтр"
+    )
+    await state.update_data(setting_filter="city")
+    await state.set_state(VacancySearchStates.enter_filter_value)
+
+
+@router.callback_query(F.data == "filter:skills")
+async def set_skills_filter(callback: CallbackQuery, state: FSMContext):
+    """Set skills filter."""
+    await callback.answer()
+
+    await callback.message.edit_text(
+        "🎯 <b>Фильтр по навыкам</b>\n\n"
+        "Введите навыки через запятую:\n"
+        "Пример: Бармен, Кофе, Английский язык\n\n"
+        "Или отправьте \"-\" чтобы убрать фильтр"
+    )
+    await state.update_data(setting_filter="skills")
+    await state.set_state(VacancySearchStates.enter_filter_value)
+
+
+@router.message(VacancySearchStates.enter_filter_value)
+async def process_filter_value(message: Message, state: FSMContext):
+    """Process filter value input."""
+    data = await state.get_data()
+    filter_type = data.get("setting_filter")
+    value = message.text.strip()
+
+    filters = data.get("search_filters", {})
+
+    if value == "-":
+        # Remove filter
+        if filter_type in filters:
+            del filters[filter_type]
+            if filter_type == "salary":
+                filters.pop("salary_min", None)
+                filters.pop("salary_max", None)
+        await message.answer("✅ Фильтр убран")
+    else:
+        # Set filter
+        if filter_type == "salary":
+            import re
+            # Parse salary range
+            numbers = re.findall(r'\d+', value.replace(',', '').replace(' ', ''))
+            if "от" in value.lower() and "до" in value.lower():
+                if len(numbers) >= 2:
+                    filters["salary_min"] = int(numbers[0])
+                    filters["salary_max"] = int(numbers[1])
+            elif "от" in value.lower():
+                if numbers:
+                    filters["salary_min"] = int(numbers[0])
+                    filters.pop("salary_max", None)
+            elif "до" in value.lower():
+                if numbers:
+                    filters["salary_max"] = int(numbers[0])
+                    filters.pop("salary_min", None)
+            else:
+                await message.answer("❌ Неверный формат. Попробуйте еще раз:")
+                return
+
+            await message.answer("✅ Фильтр по зарплате установлен")
+
+        elif filter_type == "city":
+            filters["city"] = value
+            await message.answer("✅ Фильтр по городу установлен")
+
+        elif filter_type == "skills":
+            skills = [s.strip() for s in value.split(",") if s.strip()]
+            filters["skills"] = skills
+            await message.answer(f"✅ Фильтр по навыкам установлен ({len(skills)} навыков)")
+
+    await state.update_data(search_filters=filters)
+
+    # Return to filters menu
+    callback = CallbackQuery(
+        id="dummy",
+        from_user=message.from_user,
+        chat_instance="dummy",
+        data="search_filters:show",
+        message=message
+    )
+    await show_search_filters(callback, state)
+
+
+@router.callback_query(F.data == "clear_filters")
+async def clear_filters(callback: CallbackQuery, state: FSMContext):
+    """Clear all filters."""
+    await callback.answer("Фильтры сброшены!")
+
+    await state.update_data(search_filters={})
+    await show_search_filters(callback, state)
+
+
+@router.callback_query(F.data == "apply_filters")
+async def apply_filters(callback: CallbackQuery, state: FSMContext):
+    """Apply filters and search."""
+    await callback.answer()
+
+    data = await state.get_data()
+    filters = data.get("search_filters", {})
+
+    await callback.message.edit_text("⏳ Ищу вакансии с фильтрами...")
+
+    # Convert filters to search params
+    search_params = {}
+
+    if filters.get("salary_min"):
+        search_params["salary_min"] = filters["salary_min"]
+    if filters.get("salary_max"):
+        search_params["salary_max"] = filters["salary_max"]
+    if filters.get("schedule"):
+        search_params["schedule"] = filters["schedule"]
+    if filters.get("city"):
+        search_params["city"] = filters["city"]
+    if filters.get("skills"):
+        search_params["skills"] = filters["skills"]
+
+    await show_vacancy_results(callback.message, state, search_params)
+
+
+@router.callback_query(F.data == "filters:back")
+async def filters_back(callback: CallbackQuery, state: FSMContext):
+    """Go back from filters to main search menu."""
+    await callback.answer()
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📂 По категории", callback_data="search_method:category")],
+        [InlineKeyboardButton(text="🔎 Поиск по тексту", callback_data="search_method:text")],
+        [InlineKeyboardButton(text="📋 Все вакансии", callback_data="search_method:all")],
+        [InlineKeyboardButton(text="🔧 Фильтры", callback_data="search_filters:show")]
+    ])
+
+    await callback.message.edit_text(
+        "🔍 <b>Поиск вакансий</b>\n\n"
+        "Как вы хотите искать вакансии?",
+        reply_markup=keyboard
+    )

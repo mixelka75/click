@@ -14,6 +14,8 @@ from .resume import (
 from .vacancy import Vacancy
 from .response import Response
 from .publication import Publication, PublicationType, Analytics
+from .favorite import Favorite
+from .chat import Chat, Message
 
 __all__ = [
     # User models
@@ -34,6 +36,11 @@ __all__ = [
     "Publication",
     "PublicationType",
     "Analytics",
+    # Favorite model
+    "Favorite",
+    # Chat models
+    "Chat",
+    "Message",
 ]
 
 
@@ -46,4 +53,6 @@ DOCUMENT_MODELS = [
     Response,
     Publication,
     Analytics,
+    Favorite,
+    Chat,
 ]

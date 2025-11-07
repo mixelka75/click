@@ -69,6 +69,11 @@ def get_positions_keyboard(category: str, show_all_option: bool = False) -> Inli
                 callback_data=f"position:{position}"
             ))
 
+    builder.add(InlineKeyboardButton(
+        text="✏️ Не нашли подходящий вариант?",
+        callback_data="position:custom"
+    ))
+
     # Arrange in 1 column
     builder.adjust(1)
 

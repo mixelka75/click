@@ -3,11 +3,13 @@ Resume creation - final steps (salary, experience, skills, preview, publish).
 """
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from datetime import datetime
 from loguru import logger
 import httpx
+
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.filters import IsNotMenuButton
 from bot.states.resume_states import ResumeCreationStates
@@ -23,12 +25,43 @@ from bot.keyboards.common import (
 from bot.utils.formatters import format_resume_preview
 from bot.utils.cancel_handlers import handle_cancel_resume
 from backend.models import User
-from shared.constants import SalaryType, EDUCATION_LEVELS, LANGUAGES, LANGUAGE_LEVELS
+from shared.constants import SalaryType
 from config.settings import settings
 
 
 router = Router()
 router.message.filter(IsNotMenuButton())
+
+
+EDUCATION_LEVEL_OPTIONS = [
+    "Высшее",
+    "Неоконченное высшее",
+    "Среднее профессиональное",
+    "Среднее общее",
+    "Несколько высших",
+]
+
+
+async def proceed_to_courses(message: Message, state: FSMContext) -> None:
+    """Move flow to courses section."""
+    await message.answer(
+        "🎓 <b>Повышение квалификации, курсы</b>\n\n"
+        "Добавить курсы или сертификаты?",
+        reply_markup=get_yes_no_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.add_courses)
+
+
+async def proceed_to_skills(message: Message, state: FSMContext) -> None:
+    """Move flow to skills selection."""
+    data = await state.get_data()
+    category = data.get("position_category")
+    await message.answer(
+        "<b>Выберите ваши навыки:</b>\n"
+        "(можно выбрать несколько)",
+        reply_markup=get_skills_keyboard(category, data.get("skills", []))
+    )
+    await state.set_state(ResumeCreationStates.skills)
 
 
 # ============ SALARY AND SCHEDULE ============
@@ -301,25 +334,55 @@ async def process_work_responsibilities(message_or_callback, state: FSMContext):
 
         responsibilities = message.text.strip()
 
+    await state.update_data(temp_responsibilities=responsibilities or "")
+
+    await message.answer(
+        "<b>Укажите сферу деятельности компании</b>\n"
+        "Например: ресторан, бар, кофейня, кейтеринг.",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.work_experience_industry)
+
+
+@router.message(ResumeCreationStates.work_experience_industry)
+async def process_work_industry(message: Message, state: FSMContext):
+    """Process company industry and finalize work experience entry."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "<b>Опишите ваши обязанности и достижения:</b>\n"
+            "(или нажмите кнопку ниже, чтобы пропустить)",
+            reply_markup=get_skip_button()
+        )
+        await state.set_state(ResumeCreationStates.work_experience_responsibilities)
+        return
+
+    industry = text if text.lower() != "пропустить" else ""
+
     data = await state.get_data()
 
-    # Save work experience entry
     work_exp_list = data.get("work_experience", [])
     work_exp_list.append({
         "company": data.get("temp_company"),
         "position": data.get("temp_position"),
         "start_date": data.get("temp_start_date"),
         "end_date": data.get("temp_end_date"),
-        "responsibilities": responsibilities or ""
+        "responsibilities": data.get("temp_responsibilities", ""),
+        "industry": industry or None,
     })
 
-    # Clear temp data
     await state.update_data(
         work_experience=work_exp_list,
         temp_company=None,
         temp_position=None,
         temp_start_date=None,
-        temp_end_date=None
+        temp_end_date=None,
+        temp_responsibilities=None,
     )
 
     await message.answer(
@@ -352,7 +415,7 @@ async def ask_more_work_experience(callback: CallbackQuery, state: FSMContext):
         await state.set_state(ResumeCreationStates.add_education)
 
 
-# ============ EDUCATION (simplified) ============
+# ============ EDUCATION ============
 
 @router.callback_query(ResumeCreationStates.add_education, F.data.startswith("confirm:"))
 async def ask_add_education(callback: CallbackQuery, state: FSMContext):
@@ -360,62 +423,328 @@ async def ask_add_education(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
     if callback.data == "confirm:no":
-        # Skip to skills
-        data = await state.get_data()
-        category = data.get("position_category")
-        await callback.message.answer(
-            "<b>Выберите ваши навыки:</b>\n"
-            "(можно выбрать несколько)",
-            reply_markup=get_skills_keyboard(category, [])
-        )
-        await state.set_state(ResumeCreationStates.skills)
+        await proceed_to_courses(callback.message, state)
         return
 
-    # For simplicity, just ask for institution name and skip detailed flow
+    builder = InlineKeyboardBuilder()
+    for level in EDUCATION_LEVEL_OPTIONS:
+        builder.add(InlineKeyboardButton(text=level, callback_data=f"edu_level:{level}"))
+    builder.adjust(1)
+
     await callback.message.answer(
         "🎓 <b>Образование</b>\n\n"
-        "<b>Название учебного заведения:</b>\n"
-        "(или нажмите кнопку ниже, чтобы пропустить)",
-        reply_markup=get_skip_button()
+        "Выберите уровень образования:",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(ResumeCreationStates.education_level)
+
+
+@router.callback_query(ResumeCreationStates.education_level, F.data.startswith("edu_level:"))
+async def process_education_level(callback: CallbackQuery, state: FSMContext):
+    """Store selected education level and ask for institution."""
+    await callback.answer()
+
+    level = callback.data.split(":", 1)[1]
+    await state.update_data(temp_education_level=level)
+
+    await callback.message.answer(
+        "<b>Название учебного заведения:</b>",
+        reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.education_institution)
 
 
 @router.message(ResumeCreationStates.education_institution)
-@router.callback_query(ResumeCreationStates.education_institution, F.data == "skip")
-async def process_education_simple(message_or_callback, state: FSMContext):
-    """Process education (simplified - just institution name)."""
-    institution = None
+async def process_education_institution(message: Message, state: FSMContext):
+    """Capture institution name."""
+    text = (message.text or "").strip()
 
-    if isinstance(message_or_callback, CallbackQuery):
-        await message_or_callback.answer()
-        message = message_or_callback.message
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        builder = InlineKeyboardBuilder()
+        for level in EDUCATION_LEVEL_OPTIONS:
+            builder.add(InlineKeyboardButton(text=level, callback_data=f"edu_level:{level}"))
+        builder.adjust(1)
+
+        await message.answer(
+            "🎓 <b>Образование</b>\n\n"
+            "Выберите уровень образования:",
+            reply_markup=builder.as_markup()
+        )
+        await state.set_state(ResumeCreationStates.education_level)
+        return
+
+    if len(text) < 2:
+        await message.answer("Пожалуйста, укажите полное название учебного заведения.")
+        return
+
+    await state.update_data(temp_education_institution=text)
+
+    await message.answer(
+        "<b>Факультет / специализация</b>\n"
+        "Если не хотите уточнять, напишите 'Пропустить'.",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.education_faculty)
+
+
+@router.message(ResumeCreationStates.education_faculty)
+async def process_education_faculty(message: Message, state: FSMContext):
+    """Capture faculty or specialization."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "<b>Название учебного заведения:</b>",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.education_institution)
+        return
+
+    if text.lower() != "пропустить" and text:
+        await state.update_data(temp_education_faculty=text)
     else:
-        message = message_or_callback
-        if message.text == "🚫 Отменить создание":
-            await handle_cancel_resume(message, state)
+        await state.update_data(temp_education_faculty=None)
+
+    await message.answer(
+        "<b>Год окончания</b>\n"
+        "Укажите год (например: 2022) или напишите 'Пропустить'.",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.education_graduation_year)
+
+
+@router.message(ResumeCreationStates.education_graduation_year)
+async def process_education_graduation_year(message: Message, state: FSMContext):
+    """Capture graduation year and finalize education entry."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "<b>Факультет / специализация</b>\n"
+            "Если не хотите уточнять, напишите 'Пропустить'.",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.education_faculty)
+        return
+
+    graduation_year = None
+    if text.lower() != "пропустить" and text:
+        if text.isdigit() and len(text) in {4, 2}:
+            try:
+                year_value = int(text[-4:])
+                if 1900 <= year_value <= datetime.utcnow().year + 6:
+                    graduation_year = year_value
+                else:
+                    await message.answer("Укажите реальный год окончания (например: 2022).")
+                    return
+            except ValueError:
+                graduation_year = None
+        else:
+            await message.answer("Укажите год числом или напишите 'Пропустить'.")
             return
 
-        institution = message.text.strip()
-
-    if institution:
-        data = await state.get_data()
-        edu_list = data.get("education", [])
-        edu_list.append({
-            "level": "Высшее",  # Default
-            "institution": institution
-        })
-        await state.update_data(education=edu_list)
-
-    # Move to skills
     data = await state.get_data()
-    category = data.get("position_category")
-    await message.answer(
-        "<b>Выберите ваши навыки:</b>\n"
-        "(можно выбрать несколько)",
-        reply_markup=get_skills_keyboard(category, [])
+    education_list = data.get("education", [])
+    faculty_value = data.get("temp_education_faculty")
+
+    education_list.append({
+        "level": data.get("temp_education_level"),
+        "institution": data.get("temp_education_institution"),
+        "faculty": faculty_value,
+        "specialization": faculty_value,
+        "graduation_year": graduation_year,
+    })
+
+    await state.update_data(
+        education=education_list,
+        temp_education_level=None,
+        temp_education_institution=None,
+        temp_education_faculty=None,
     )
-    await state.set_state(ResumeCreationStates.skills)
+
+    await message.answer(
+        f"✅ Образование добавлено. Всего записей: {len(education_list)}\n\n"
+        "<b>Добавить ещё одно образование?</b>",
+        reply_markup=get_yes_no_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.education_more)
+
+
+@router.callback_query(ResumeCreationStates.education_more, F.data.startswith("confirm:"))
+async def process_education_more(callback: CallbackQuery, state: FSMContext):
+    """Handle request to add more education entries."""
+    await callback.answer()
+
+    if callback.data == "confirm:yes":
+        builder = InlineKeyboardBuilder()
+        for level in EDUCATION_LEVEL_OPTIONS:
+            builder.add(InlineKeyboardButton(text=level, callback_data=f"edu_level:{level}"))
+        builder.adjust(1)
+
+        await callback.message.answer(
+            "🎓 <b>Образование</b>\n\n"
+            "Выберите уровень образования:",
+            reply_markup=builder.as_markup()
+        )
+        await state.set_state(ResumeCreationStates.education_level)
+    else:
+        await proceed_to_courses(callback.message, state)
+
+
+# ============ COURSES ============
+
+
+@router.callback_query(ResumeCreationStates.add_courses, F.data.startswith("confirm:"))
+async def process_add_courses(callback: CallbackQuery, state: FSMContext):
+    """Ask user to add courses or skip."""
+    await callback.answer()
+
+    if callback.data == "confirm:no":
+        await proceed_to_skills(callback.message, state)
+        return
+
+    await callback.message.answer(
+        "<b>Название курса или программы:</b>",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.course_name)
+
+
+@router.message(ResumeCreationStates.course_name)
+async def process_course_name(message: Message, state: FSMContext):
+    """Capture course name."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await proceed_to_courses(message, state)
+        return
+
+    if text.lower() == "пропустить" or not text:
+        await proceed_to_skills(message, state)
+        return
+
+    await state.update_data(temp_course_name=text)
+
+    await message.answer(
+        "<b>Где проходили обучение?</b>\n"
+        "Укажите организатора (или напишите 'Пропустить').",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.course_organization)
+
+
+@router.message(ResumeCreationStates.course_organization)
+async def process_course_organization(message: Message, state: FSMContext):
+    """Capture course organization."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "<b>Название курса или программы:</b>",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.course_name)
+        return
+
+    if text.lower() != "пропустить" and text:
+        await state.update_data(temp_course_organization=text)
+    else:
+        await state.update_data(temp_course_organization=None)
+
+    await message.answer(
+        "<b>Год окончания</b>\n"
+        "Укажите год (например: 2021) или напишите 'Пропустить'.",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.course_year)
+
+
+@router.message(ResumeCreationStates.course_year)
+async def process_course_year(message: Message, state: FSMContext):
+    """Capture course completion year."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "<b>Где проходили обучение?</b>\n"
+            "Укажите организатора (или напишите 'Пропустить').",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.course_organization)
+        return
+
+    completion_year = None
+    if text.lower() != "пропустить" and text:
+        if text.isdigit() and len(text) in {4, 2}:
+            year_value = int(text[-4:])
+            if 1950 <= year_value <= datetime.utcnow().year + 1:
+                completion_year = year_value
+            else:
+                await message.answer("Укажите корректный год окончания.")
+                return
+        else:
+            await message.answer("Укажите год числом или напишите 'Пропустить'.")
+            return
+
+    data = await state.get_data()
+    courses = data.get("courses", [])
+    courses.append({
+        "name": data.get("temp_course_name"),
+        "organization": data.get("temp_course_organization"),
+        "completion_year": completion_year,
+    })
+
+    await state.update_data(
+        courses=courses,
+        temp_course_name=None,
+        temp_course_organization=None,
+    )
+
+    await message.answer(
+        f"✅ Курс добавлен. Всего записей: {len(courses)}\n\n"
+        "<b>Добавить ещё один курс?</b>",
+        reply_markup=get_yes_no_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.course_more)
+
+
+@router.callback_query(ResumeCreationStates.course_more, F.data.startswith("confirm:"))
+async def process_more_courses(callback: CallbackQuery, state: FSMContext):
+    """Handle additional courses selection."""
+    await callback.answer()
+
+    if callback.data == "confirm:yes":
+        await callback.message.answer(
+            "<b>Название курса или программы:</b>",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.course_name)
+    else:
+        await proceed_to_skills(callback.message, state)
 
 
 # Continued in next file...

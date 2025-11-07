@@ -45,14 +45,15 @@ def get_main_menu_employer() -> ReplyKeyboardMarkup:
     """Main menu for employers."""
     builder = ReplyKeyboardBuilder()
     builder.row(
-        KeyboardButton(text="🔍 Искать сотрудников")
+        KeyboardButton(text="📋 Мои вакансии"),
+        KeyboardButton(text="📝 Создать вакансию")
     )
     builder.row(
-        KeyboardButton(text="📝 Создать вакансию"),
-        KeyboardButton(text="📋 Мои вакансии")
+        KeyboardButton(text="📬 Отклики на мои вакансии"),
+        KeyboardButton(text="🔍 Найти резюме")
     )
     builder.row(
-        KeyboardButton(text="📬 Управление откликами"),
+        KeyboardButton(text="🤖 Рекомендации"),
         KeyboardButton(text="⭐ Избранное")
     )
     builder.row(

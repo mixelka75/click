@@ -16,6 +16,14 @@ def format_resume_preview(data: dict) -> str:
     # Basic info
     if data.get("full_name"):
         lines.append(f"👤 <b>ФИО:</b> {data['full_name']}")
+    if data.get("citizenship"):
+        lines.append(f"🌍 <b>Гражданство:</b> {data['citizenship']}")
+    if data.get("birth_date"):
+        try:
+            birth_dt = datetime.strptime(data["birth_date"], "%Y-%m-%d").date()
+            lines.append(f"🎂 <b>Дата рождения:</b> {birth_dt.strftime('%d.%m.%Y')}")
+        except (ValueError, TypeError):
+            lines.append(f"🎂 <b>Дата рождения:</b> {data['birth_date']}")
 
     if data.get("city"):
         lines.append(f"📍 <b>Город:</b> {data['city']}")
@@ -24,9 +32,12 @@ def format_resume_preview(data: dict) -> str:
 
     if data.get("phone"):
         lines.append(f"📱 <b>Телефон:</b> {data['phone']}")
-
     if data.get("email"):
         lines.append(f"📧 <b>Email:</b> {data['email']}")
+    if data.get("telegram"):
+        lines.append(f"✈️ <b>Telegram:</b> {data['telegram']}")
+    if data.get("other_contacts"):
+        lines.append(f"🔗 <b>Доп. контакты:</b> {data['other_contacts']}")
 
     # Position
     lines.append(f"\n💼 <b>ЖЕЛАЕМАЯ ДОЛЖНОСТЬ</b>")
@@ -76,6 +87,32 @@ def format_resume_preview(data: dict) -> str:
         lines.append(f"\n🗣 <b>ЯЗЫКИ</b>")
         for lang in data["languages"]:
             lines.append(f"• {lang.get('language', '')} - {lang.get('level', '')}")
+
+    # Courses
+    if data.get("courses"):
+        lines.append(f"\n🎓 <b>КУРСЫ</b>")
+        for course in data["courses"][:3]:
+            course_line = course.get("name", "Курс")
+            if course.get("organization"):
+                course_line += f", {course['organization']}"
+            if course.get("completion_year"):
+                course_line += f" ({course['completion_year']})"
+            lines.append(f"• {course_line}")
+        if len(data["courses"]) > 3:
+            lines.append(f"• ... и ещё {len(data['courses']) - 3}")
+
+    # References
+    if data.get("references"):
+        lines.append(f"\n📇 <b>РЕКОМЕНДАЦИИ</b>")
+        for ref in data["references"][:2]:
+            ref_line = ref.get("full_name", "Рекомендатель")
+            if ref.get("position"):
+                ref_line += f", {ref['position']}"
+            if ref.get("company"):
+                ref_line += f", {ref['company']}"
+            lines.append(f"• {ref_line}")
+        if len(data["references"]) > 2:
+            lines.append(f"• ... и ещё {len(data['references']) - 2}")
 
     # About
     if data.get("about"):

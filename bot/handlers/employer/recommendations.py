@@ -16,7 +16,7 @@ from backend.services.recommendation_service import recommendation_service
 router = Router()
 
 
-@router.message(F.text == "🔍 Искать сотрудников")
+@router.message(F.text.in_({"🤖 Рекомендации", "🔍 Искать сотрудников"}))
 async def show_candidate_recommendations_menu(message: Message, state: FSMContext):
     """Show menu to select vacancy for employee search recommendations."""
     try:

@@ -8,6 +8,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from loguru import logger
 import httpx
+from datetime import datetime
 
 from backend.models import User
 from config.settings import settings
@@ -17,7 +18,29 @@ from shared.constants import UserRole
 router = Router()
 
 
-@router.message(F.text == "📬 Управление откликами")
+async def cleanup_response_messages(message: Message, state: FSMContext) -> None:
+    """Delete previously shown response messages (photo + card)."""
+
+    data = await state.get_data()
+    chat_id = message.chat.id
+    photo_message_id = data.get("current_response_photo_id")
+    card_message_id = data.get("current_response_message_id")
+
+    for msg_id in (card_message_id, photo_message_id):
+        if not msg_id:
+            continue
+        try:
+            await message.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception as exc:  # noqa: BLE001 - best effort cleanup
+            logger.debug(f"Could not delete message {msg_id}: {exc}")
+
+    await state.update_data(
+        current_response_photo_id=None,
+        current_response_message_id=None,
+    )
+
+
+@router.message(F.text.in_({"📬 Отклики на мои вакансии", "📬 Управление откликами"}))
 async def manage_responses(message: Message, state: FSMContext):
     """Show vacancy selection for response management."""
     telegram_id = message.from_user.id
@@ -48,7 +71,7 @@ async def manage_responses(message: Message, state: FSMContext):
 
                 if not vacancies_with_responses:
                     await message.answer(
-                        "📬 <b>Управление откликами</b>\n\n"
+                        "📬 <b>Отклики на мои вакансии</b>\n\n"
                         "У вас нет активных вакансий с откликами."
                     )
                     return
@@ -67,8 +90,8 @@ async def manage_responses(message: Message, state: FSMContext):
                 keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
                 await message.answer(
-                    "📬 <b>Управление откликами</b>\n\n"
-                    "Выберите вакансию для просмотра откликов:",
+                    "📬 <b>Отклики на мои вакансии</b>\n\n"
+                    "По какой вакансии показать отклики?",
                     reply_markup=keyboard
                 )
 
@@ -101,7 +124,12 @@ async def show_vacancy_responses(callback: CallbackQuery, state: FSMContext):
                 if not responses:
                     await callback.message.edit_text(
                         "📬 <b>Отклики</b>\n\n"
-                        "Откликов пока нет."
+                        "По этой вакансии пока нет откликов."
+                    )
+                    await state.update_data(
+                        vacancy_id=vacancy_id,
+                        responses=[],
+                        current_response_index=0
                     )
                     return
 
@@ -112,8 +140,14 @@ async def show_vacancy_responses(callback: CallbackQuery, state: FSMContext):
                     current_response_index=0
                 )
 
+                # Remove vacancy selection message
+                try:
+                    await callback.message.delete()
+                except Exception:
+                    pass
+
                 # Show first response
-                await show_response_card(callback.message, state, 0, edit=True)
+                await show_response_card(callback.message, state, 0)
 
             else:
                 await callback.message.edit_text("❌ Ошибка при загрузке откликов.")
@@ -123,69 +157,125 @@ async def show_vacancy_responses(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text("❌ Ошибка при загрузке откликов.")
 
 
-async def show_response_card(message: Message, state: FSMContext, index: int, edit: bool = False):
-    """Show response card with actions."""
+async def show_response_card(message: Message, state: FSMContext, index: int) -> None:
+    """Render a response card with photo, details and actions."""
+
     data = await state.get_data()
     responses = data.get("responses", [])
 
-    if index < 0 or index >= len(responses):
+    if not responses:
+        await cleanup_response_messages(message, state)
+        await message.answer(
+            "📬 <b>Отклики</b>\n\n"
+            "По этой вакансии пока нет откликов."
+        )
         return
 
+    # Clamp index to valid range
+    total = len(responses)
+    if index < 0:
+        index = 0
+    if index >= total:
+        index = total - 1
+
     response = responses[index]
-    resume = response.get("resume", {})
-    vacancy = response.get("vacancy", {})
+    resume = response.get("resume", {}) or {}
+    vacancy = response.get("vacancy", {}) or {}
 
-    # Format response card
-    text = format_response_card(response, resume, vacancy, index + 1, len(responses))
+    await cleanup_response_messages(message, state)
 
-    # Build keyboard
+    photo_message_id = None
+    photo_id = resume.get("photo_file_id") or resume.get("photo_url")
+    if photo_id:
+        caption_lines = [
+            resume.get("full_name"),
+            resume.get("desired_position"),
+            resume.get("city"),
+        ]
+        caption = "\n".join(filter(None, caption_lines)).strip() or "Фото кандидата"
+        try:
+            photo_message = await message.answer_photo(photo=photo_id, caption=caption)
+            photo_message_id = photo_message.message_id
+        except Exception as exc:  # noqa: BLE001 - photo is optional, log and continue
+            logger.debug(f"Failed to send response photo: {exc}")
+            photo_message_id = None
+
+    text = format_response_card(response, resume, vacancy, index + 1, total)
+
     buttons = []
+    response_id = response.get("id")
+    status = response.get("status")
 
     # Navigation
-    nav_buttons = []
+    nav_row = []
     if index > 0:
-        nav_buttons.append(
-            InlineKeyboardButton(text="⬅️ Пред.", callback_data=f"resp_nav:prev:{index}")
-        )
-    if index < len(responses) - 1:
-        nav_buttons.append(
-            InlineKeyboardButton(text="➡️ След.", callback_data=f"resp_nav:next:{index}")
-        )
+        nav_row.append(InlineKeyboardButton(text="◀️ Предыдущий", callback_data=f"resp_nav:prev:{index}"))
+    if index < total - 1:
+        nav_row.append(InlineKeyboardButton(text="Следующий отклик ▶️", callback_data=f"resp_nav:next:{index}"))
+    if nav_row:
+        buttons.append(nav_row)
 
-    if nav_buttons:
-        buttons.append(nav_buttons)
+    # Actions
+    if response_id:
+        if status in {"pending", "viewed"}:
+            buttons.append([
+                InlineKeyboardButton(
+                    text="🤝 Предложить собеседование",
+                    callback_data=f"resp_invite:{response_id}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"resp_reject:{response_id}"
+                ),
+            ])
+        elif status == "invited":
+            buttons.append([
+                InlineKeyboardButton(
+                    text="✅ Отметить как принят",
+                    callback_data=f"resp_accept:{response_id}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"resp_reject:{response_id}"
+                ),
+            ])
+        elif status == "accepted":
+            buttons.append([
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"resp_reject:{response_id}"
+                )
+            ])
+        elif status != "rejected":
+            buttons.append([
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"resp_reject:{response_id}"
+                )
+            ])
 
-    # Actions based on status
-    status = response.get("status")
-    response_id = response.get("id")
-
-    if status == "pending":
+    resume_id = resume.get("id")
+    if resume_id:
         buttons.append([
-            InlineKeyboardButton(text="✅ Принять", callback_data=f"resp_accept:{response_id}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"resp_reject:{response_id}")
-        ])
-    elif status == "viewed":
-        buttons.append([
-            InlineKeyboardButton(text="✅ Пригласить", callback_data=f"resp_invite:{response_id}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"resp_reject:{response_id}")
+            InlineKeyboardButton(
+                text="📄 Посмотреть резюме полностью",
+                callback_data=f"resp_view_resume:{resume_id}"
+            )
         ])
 
-    # View resume details
-    buttons.append([
-        InlineKeyboardButton(text="📋 Полное резюме", callback_data=f"resp_view_resume:{resume.get('id')}")
-    ])
-
-    # Back
     buttons.append([
         InlineKeyboardButton(text="◀️ Назад к вакансиям", callback_data="back_to_vacancies")
     ])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    if edit:
-        await message.edit_text(text, reply_markup=keyboard)
-    else:
-        await message.answer(text, reply_markup=keyboard)
+    card_message = await message.answer(text, reply_markup=keyboard)
+
+    await state.update_data(
+        current_response_index=index,
+        current_response_message_id=card_message.message_id,
+        current_response_photo_id=photo_message_id,
+    )
 
 
 def format_response_card(response: dict, resume: dict, vacancy: dict, index: int, total: int) -> str:
@@ -199,6 +289,14 @@ def format_response_card(response: dict, resume: dict, vacancy: dict, index: int
     # Candidate info
     lines.append("<b>👤 КАНДИДАТ</b>")
     lines.append(f"ФИО: {resume.get('full_name', 'Не указано')}")
+    if resume.get('citizenship'):
+        lines.append(f"Гражданство: {resume.get('citizenship')}")
+    if resume.get('birth_date'):
+        try:
+            birth_dt = datetime.strptime(resume['birth_date'], "%Y-%m-%d")
+            lines.append(f"Дата рождения: {birth_dt.strftime('%d.%m.%Y')}")
+        except (ValueError, TypeError):
+            lines.append(f"Дата рождения: {resume.get('birth_date')}")
     lines.append(f"Желаемая должность: {resume.get('desired_position', '-')}")
 
     if resume.get('city'):
@@ -206,9 +304,12 @@ def format_response_card(response: dict, resume: dict, vacancy: dict, index: int
 
     if resume.get('phone'):
         lines.append(f"📱 {resume.get('phone')}")
-
     if resume.get('email'):
         lines.append(f"📧 {resume.get('email')}")
+    if resume.get('telegram'):
+        lines.append(f"✈️ {resume.get('telegram')}")
+    if resume.get('other_contacts'):
+        lines.append(f"🔗 {resume.get('other_contacts')}")
 
     if resume.get('desired_salary'):
         lines.append(f"💰 От {resume['desired_salary']:,} ₽")
@@ -223,6 +324,19 @@ def format_response_card(response: dict, resume: dict, vacancy: dict, index: int
         if len(resume['skills']) > 3:
             skills += f" и ещё {len(resume['skills']) - 3}"
         lines.append(f"🎯 Навыки: {skills}")
+
+    # Languages preview
+    if resume.get('languages'):
+        lang_items = [
+            f"{lang.get('language')} ({lang.get('level')})"
+            for lang in resume['languages'][:2]
+            if lang
+        ]
+        if lang_items:
+            lang_text = ", ".join(lang_items)
+            if len(resume['languages']) > 2:
+                lang_text += f" и ещё {len(resume['languages']) - 2}"
+            lines.append(f"🗣 Языки: {lang_text}")
 
     lines.append("")
 
@@ -268,8 +382,7 @@ async def navigate_responses(callback: CallbackQuery, state: FSMContext):
     else:  # next
         new_index = current_index + 1
 
-    await state.update_data(current_response_index=new_index)
-    await show_response_card(callback.message, state, new_index, edit=True)
+    await show_response_card(callback.message, state, new_index)
 
 
 @router.callback_query(F.data.startswith("resp_accept:"))
@@ -289,8 +402,8 @@ async def accept_response(callback: CallbackQuery, state: FSMContext):
 
             if response.status_code == 200:
                 await callback.message.answer(
-                    "✅ <b>Отклик принят!</b>\n\n"
-                    "Кандидат получит уведомление о принятии."
+                    "✅ <b>Статус обновлён.</b>\n\n"
+                    "Кандидат отмечен как принятый."
                 )
 
                 # Refresh current response
@@ -307,7 +420,7 @@ async def accept_response(callback: CallbackQuery, state: FSMContext):
                 if reload_response.status_code == 200:
                     new_responses = reload_response.json()
                     await state.update_data(responses=new_responses)
-                    await show_response_card(callback.message, state, current_index, edit=False)
+                    await show_response_card(callback.message, state, current_index)
 
             else:
                 await callback.message.answer("❌ Ошибка при обновлении статуса.")
@@ -334,8 +447,8 @@ async def reject_response(callback: CallbackQuery, state: FSMContext):
 
             if response.status_code == 200:
                 await callback.message.answer(
-                    "❌ <b>Отклик отклонен</b>\n\n"
-                    "Кандидат получит уведомление."
+                    "❌ <b>Отклик отклонён.</b>\n\n"
+                    "Бот отправил кандидату уведомление." 
                 )
 
                 # Refresh current response
@@ -352,7 +465,7 @@ async def reject_response(callback: CallbackQuery, state: FSMContext):
                 if reload_response.status_code == 200:
                     new_responses = reload_response.json()
                     await state.update_data(responses=new_responses)
-                    await show_response_card(callback.message, state, current_index, edit=False)
+                    await show_response_card(callback.message, state, current_index)
 
             else:
                 await callback.message.answer("❌ Ошибка при обновлении статуса.")
@@ -379,8 +492,8 @@ async def invite_from_response(callback: CallbackQuery, state: FSMContext):
 
             if response.status_code == 200:
                 await callback.message.answer(
-                    "✅ <b>Приглашение отправлено!</b>\n\n"
-                    "Кандидат получит уведомление о приглашении на собеседование."
+                    "🤝 <b>Предложение отправлено!</b>\n\n"
+                    "Бот уведомил кандидата и передал ваши контакты."
                 )
 
                 # Refresh current response
@@ -397,7 +510,7 @@ async def invite_from_response(callback: CallbackQuery, state: FSMContext):
                 if reload_response.status_code == 200:
                     new_responses = reload_response.json()
                     await state.update_data(responses=new_responses)
-                    await show_response_card(callback.message, state, current_index, edit=False)
+                    await show_response_card(callback.message, state, current_index)
 
             else:
                 await callback.message.answer("❌ Ошибка при отправке приглашения.")
@@ -451,15 +564,19 @@ async def back_to_responses(callback: CallbackQuery, state: FSMContext):
     current_index = data.get("current_response_index", 0)
 
     await callback.message.delete()
-    await show_response_card(callback.message, state, current_index, edit=False)
+    await show_response_card(callback.message, state, current_index)
 
 
 @router.callback_query(F.data == "back_to_vacancies")
 async def back_to_vacancies(callback: CallbackQuery, state: FSMContext):
     """Return to vacancy selection."""
     await callback.answer()
+    await cleanup_response_messages(callback.message, state)
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     await state.clear()
-    await callback.message.delete()
 
     # Re-trigger the main handler
     await manage_responses(callback.message, state)

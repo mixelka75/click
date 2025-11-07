@@ -19,10 +19,13 @@ class ResumeCreationStates(StatesGroup):
     # Contact information
     phone = State()
     email = State()
+    telegram = State()
+    other_contacts = State()
 
     # Position and salary
     position_category = State()
     position = State()
+    position_custom = State()
     specialization = State()  # For cooks
     cuisines = State()  # For cooks
     desired_salary = State()

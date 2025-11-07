@@ -4,21 +4,72 @@ Resume creation - final steps (skills, about, preview, publish).
 
 from aiogram import Router, F
 from bot.filters import IsNotMenuButton
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 import httpx
+import re
 
 from bot.states.resume_states import ResumeCreationStates
 from bot.keyboards.positions import get_skills_keyboard
-from bot.keyboards.common import get_skip_button, get_confirm_publish_keyboard, get_main_menu_applicant
+from bot.keyboards.common import (
+    get_skip_button,
+    get_confirm_publish_keyboard,
+    get_main_menu_applicant,
+    get_back_cancel_keyboard,
+    get_yes_no_keyboard,
+)
 from bot.utils.formatters import format_resume_preview
 from backend.models import User
 from config.settings import settings
+from shared.constants import LANGUAGE_LEVELS
 
 
 router = Router()
 router.message.filter(IsNotMenuButton())
+
+
+async def prompt_languages(message: Message, state: FSMContext) -> None:
+    """Prompt user to add language proficiency."""
+    await message.answer(
+        "🗣 <b>Иностранные языки</b>\n\n"
+        "Добавить владение иностранными языками?",
+        reply_markup=get_yes_no_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.add_languages)
+
+
+async def prompt_about(message: Message, state: FSMContext) -> None:
+    """Prompt user for 'about' section."""
+    await message.answer(
+        "<b>Расскажите немного о себе:</b>\n"
+        "Ваши сильные стороны, достижения, хобби...\n"
+        "(или нажмите кнопку ниже, чтобы пропустить)",
+        reply_markup=get_skip_button()
+    )
+    await state.set_state(ResumeCreationStates.about)
+
+
+async def prompt_references(message: Message, state: FSMContext) -> None:
+    """Prompt user to add references."""
+    await message.answer(
+        "📇 <b>Рекомендации</b>\n\n"
+        "Хотите добавить рекомендателя?",
+        reply_markup=get_yes_no_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.add_references)
+
+
+async def prompt_photo(message: Message, state: FSMContext) -> None:
+    """Prompt user to add a photo."""
+    await message.answer(
+        "📸 <b>Фотография</b>\n\n"
+        "Хотите добавить фото к резюме?\n"
+        "Отправьте фотографию или нажмите 'Пропустить'.",
+        reply_markup=get_skip_button()
+    )
+    await state.set_state(ResumeCreationStates.photo)
 
 
 # ============ SKILLS ============
@@ -39,12 +90,8 @@ async def process_skills(callback: CallbackQuery, state: FSMContext):
 
         await callback.message.answer(
             f"✅ Выбрано навыков: {len(skills)}\n\n"
-            "<b>Расскажите немного о себе:</b>\n"
-            "Ваши сильные стороны, достижения, хобби...\n"
-            "(или нажмите кнопку ниже, чтобы пропустить)",
-            reply_markup=get_skip_button()
         )
-        await state.set_state(ResumeCreationStates.about)
+        await prompt_languages(callback.message, state)
         return
 
     if callback.data == "skill:custom":
@@ -113,6 +160,109 @@ async def process_custom_skills(message_or_callback, state: FSMContext):
     await state.set_state(ResumeCreationStates.skills)
 
 
+# ============ LANGUAGES ============
+
+
+@router.callback_query(ResumeCreationStates.add_languages, F.data.startswith("confirm:"))
+async def process_add_languages(callback: CallbackQuery, state: FSMContext):
+    """Handle choice to add languages."""
+    await callback.answer()
+
+    if callback.data == "confirm:no":
+        await prompt_about(callback.message, state)
+        return
+
+    await callback.message.answer(
+        "<b>Введите язык</b>\n"
+        "Например: Английский.\n"
+        "Если хотите завершить, напишите 'Пропустить'.",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.language_name)
+
+
+@router.message(ResumeCreationStates.language_name)
+async def process_language_name(message: Message, state: FSMContext):
+    """Capture language name."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await state.clear()
+        await message.answer("Создание резюме отменено.")
+        return
+
+    if text == "◀️ Назад":
+        await prompt_languages(message, state)
+        return
+
+    if text.lower() == "пропустить" or not text:
+        await prompt_about(message, state)
+        return
+
+    await state.update_data(temp_language_name=text)
+
+    builder = InlineKeyboardBuilder()
+    for idx, level in enumerate(LANGUAGE_LEVELS):
+        builder.add(InlineKeyboardButton(text=level, callback_data=f"lang_level:{idx}"))
+    builder.adjust(1)
+
+    await message.answer(
+        "<b>Выберите уровень владения</b>",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(ResumeCreationStates.language_level)
+
+
+@router.callback_query(ResumeCreationStates.language_level, F.data.startswith("lang_level:"))
+async def process_language_level(callback: CallbackQuery, state: FSMContext):
+    """Store level for the current language."""
+    await callback.answer()
+
+    index = int(callback.data.split(":", 1)[1])
+    if index < 0 or index >= len(LANGUAGE_LEVELS):
+        await callback.answer("Некорректный уровень", show_alert=True)
+        return
+
+    data = await state.get_data()
+    language_name = data.get("temp_language_name")
+    if not language_name:
+        await callback.answer("Не удалось определить язык", show_alert=True)
+        await prompt_about(callback.message, state)
+        return
+
+    languages = data.get("languages", [])
+    languages.append({
+        "language": language_name,
+        "level": LANGUAGE_LEVELS[index],
+    })
+
+    await state.update_data(languages=languages, temp_language_name=None)
+
+    await callback.message.answer(
+        f"✅ Добавлен язык: {language_name} — {LANGUAGE_LEVELS[index]}\n\n"
+        "<b>Добавить ещё один язык?</b>",
+        reply_markup=get_yes_no_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.language_more)
+
+
+@router.callback_query(ResumeCreationStates.language_more, F.data.startswith("confirm:"))
+async def process_language_more(callback: CallbackQuery, state: FSMContext):
+    """Handle adding more languages."""
+    await callback.answer()
+
+    if callback.data == "confirm:yes":
+        await callback.message.answer(
+            "<b>Введите язык</b>\n"
+            "Например: Английский.\n"
+            "Если хотите завершить, напишите 'Пропустить'.",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.language_name)
+    else:
+        await prompt_about(callback.message, state)
+
+
 # ============ ABOUT ============
 
 @router.message(ResumeCreationStates.about)
@@ -139,14 +289,183 @@ async def process_about(message_or_callback, state: FSMContext):
     if about:
         await state.update_data(about=about)
 
-    # Ask for photo
-    await message.answer(
-        "📸 <b>Фотография</b>\n\n"
-        "Хотите добавить фото к резюме?\n"
-        "Отправьте фотографию или нажмите 'Пропустить'.",
-        reply_markup=get_skip_button()
+    await prompt_references(message, state)
+
+
+@router.callback_query(ResumeCreationStates.add_references, F.data.startswith("confirm:"))
+async def process_add_references(callback: CallbackQuery, state: FSMContext):
+    """Handle choice to add references."""
+    await callback.answer()
+
+    if callback.data == "confirm:no":
+        await prompt_photo(callback.message, state)
+        return
+
+    await callback.message.answer(
+        "<b>ФИО рекомендателя:</b>",
+        reply_markup=get_back_cancel_keyboard()
     )
-    await state.set_state(ResumeCreationStates.photo)
+    await state.set_state(ResumeCreationStates.reference_name)
+
+
+@router.message(ResumeCreationStates.reference_name)
+async def process_reference_name(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await state.clear()
+        await message.answer("Создание резюме отменено.")
+        return
+
+    if text == "◀️ Назад":
+        await prompt_references(message, state)
+        return
+
+    if text.lower() == "пропустить" or not text:
+        await prompt_photo(message, state)
+        return
+
+    await state.update_data(temp_reference_name=text)
+
+    await message.answer(
+        "<b>Должность рекомендателя:</b>",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.reference_position)
+
+
+@router.message(ResumeCreationStates.reference_position)
+async def process_reference_position(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await state.clear()
+        await message.answer("Создание резюме отменено.")
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "<b>ФИО рекомендателя:</b>",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.reference_name)
+        return
+
+    if text.lower() == "пропустить":
+        await state.update_data(temp_reference_position=None)
+    else:
+        await state.update_data(temp_reference_position=text)
+
+    await message.answer(
+        "<b>Компания рекомендателя:</b>\n"
+        "(или напишите 'Пропустить')",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.reference_company)
+
+
+@router.message(ResumeCreationStates.reference_company)
+async def process_reference_company(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await state.clear()
+        await message.answer("Создание резюме отменено.")
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "<b>Должность рекомендателя:</b>",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.reference_position)
+        return
+
+    if text.lower() == "пропустить":
+        await state.update_data(temp_reference_company=None)
+    else:
+        await state.update_data(temp_reference_company=text)
+
+    await message.answer(
+        "<b>Контакты рекомендателя</b>\n"
+        "Укажите телефон, email или ссылку.\n"
+        "Если не хотите указывать, напишите 'Пропустить'.",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.reference_phone)
+
+
+@router.message(ResumeCreationStates.reference_phone)
+async def process_reference_contacts(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await state.clear()
+        await message.answer("Создание резюме отменено.")
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "<b>Компания рекомендателя:</b>\n"
+            "(или напишите 'Пропустить')",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.reference_company)
+        return
+
+    data = await state.get_data()
+    references = data.get("references", [])
+
+    phone = None
+    email = None
+
+    if text.lower() != "пропустить" and text:
+        phone_match = re.search(r"\+?\d[\d\s\-\(\)]{6,}", text)
+        email_match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
+        if phone_match:
+            phone = phone_match.group(0)
+        if email_match:
+            email = email_match.group(0)
+
+        if not phone and not email:
+            phone = text
+
+    references.append({
+        "full_name": data.get("temp_reference_name"),
+        "position": data.get("temp_reference_position"),
+        "company": data.get("temp_reference_company"),
+        "phone": phone,
+        "email": email,
+    })
+
+    await state.update_data(
+        references=references,
+        temp_reference_name=None,
+        temp_reference_position=None,
+        temp_reference_company=None,
+    )
+
+    await message.answer(
+        f"✅ Рекомендатель добавлен. Всего записей: {len(references)}\n\n"
+        "<b>Добавить ещё одного рекомендателя?</b>",
+        reply_markup=get_yes_no_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.reference_more)
+
+
+@router.callback_query(ResumeCreationStates.reference_more, F.data.startswith("confirm:"))
+async def process_reference_more(callback: CallbackQuery, state: FSMContext):
+    """Handle adding more references."""
+    await callback.answer()
+
+    if callback.data == "confirm:yes":
+        await callback.message.answer(
+            "<b>ФИО рекомендателя:</b>",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.reference_name)
+    else:
+        await prompt_photo(callback.message, state)
 
 
 @router.message(ResumeCreationStates.photo, F.photo)
@@ -231,11 +550,15 @@ async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
                 resume_data = {
                     "user_id": str(user.id),
                     "full_name": data.get("full_name"),
+                    "citizenship": data.get("citizenship"),
+                    "birth_date": data.get("birth_date"),
                     "city": data.get("city"),
                     "ready_to_relocate": data.get("ready_to_relocate", False),
                     "ready_for_business_trips": data.get("ready_for_business_trips", False),
                     "phone": data.get("phone"),
                     "email": data.get("email"),
+                    "telegram": data.get("telegram"),
+                    "other_contacts": data.get("other_contacts"),
                     "photo_file_id": data.get("photo_file_id"),  # Ignored серверной моделью, не критично
                     "desired_position": data.get("desired_position"),
                     "position_category": data.get("position_category"),
@@ -257,6 +580,12 @@ async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
                     resume_data["work_experience"] = data["work_experience"]
                 if data.get("education"):
                     resume_data["education"] = data["education"]
+                if data.get("courses"):
+                    resume_data["courses"] = data["courses"]
+                if data.get("languages"):
+                    resume_data["languages"] = data["languages"]
+                if data.get("references"):
+                    resume_data["references"] = data["references"]
 
                 create_url = f"{base_url}/resumes"
                 response = await client.post(create_url, json=resume_data, timeout=10.0)

@@ -79,6 +79,13 @@ def format_resume_details(resume: Resume) -> str:
 
     # Personal info
     lines.append(f"👤 <b>ФИО:</b> {resume.full_name}")
+    if resume.citizenship:
+        lines.append(f"🌍 <b>Гражданство:</b> {resume.citizenship}")
+    if resume.birth_date:
+        try:
+            lines.append(f"🎂 <b>Дата рождения:</b> {resume.birth_date.strftime('%d.%m.%Y')}")
+        except AttributeError:
+            lines.append(f"🎂 <b>Дата рождения:</b> {resume.birth_date}")
     lines.append(f"📍 <b>Город:</b> {resume.city}")
     if resume.ready_to_relocate:
         lines.append("   ✈️ Готов к переезду")
@@ -89,6 +96,10 @@ def format_resume_details(resume: Resume) -> str:
         lines.append(f"   📱 {resume.phone}")
     if resume.email:
         lines.append(f"   📧 {resume.email}")
+    if getattr(resume, 'telegram', None):
+        lines.append(f"   ✈️ {resume.telegram}")
+    if getattr(resume, 'other_contacts', None):
+        lines.append(f"   🔗 {resume.other_contacts}")
 
     # Desired position
     lines.append(f"\n💼 <b>ЖЕЛАЕМАЯ ДОЛЖНОСТЬ</b>")
@@ -134,6 +145,35 @@ def format_resume_details(resume: Resume) -> str:
         lines.append(f"\n🗣 <b>ЯЗЫКИ</b>")
         for lang in resume.languages[:3]:
             lines.append(f"   • {lang.language} - {lang.level}")
+
+    # Courses
+    if getattr(resume, 'courses', None):
+        lines.append(f"\n🎓 <b>КУРСЫ</b>")
+        for course in resume.courses[:5]:
+            course_line = course.name
+            if course.organization:
+                course_line += f", {course.organization}"
+            if course.completion_year:
+                course_line += f" ({course.completion_year})"
+            lines.append(f"   • {course_line}")
+
+    # References
+    if getattr(resume, 'references', None):
+        lines.append(f"\n📇 <b>РЕКОМЕНДАЦИИ</b>")
+        for reference in resume.references[:3]:
+            ref_line = reference.full_name
+            if reference.position:
+                ref_line += f", {reference.position}"
+            if reference.company:
+                ref_line += f", {reference.company}"
+            contact_parts = []
+            if reference.phone:
+                contact_parts.append(reference.phone)
+            if reference.email:
+                contact_parts.append(reference.email)
+            if contact_parts:
+                ref_line += f" — {'; '.join(contact_parts)}"
+            lines.append(f"   • {ref_line}")
 
     # Analytics
     lines.append(f"\n📊 <b>Статистика:</b>")

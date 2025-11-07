@@ -7,6 +7,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from loguru import logger
 import httpx
+from datetime import datetime
 
 from bot.states.search_states import ResumeSearchStates
 from bot.keyboards.positions import get_position_categories_keyboard, get_positions_keyboard
@@ -203,8 +204,13 @@ async def show_resume_card(message: Message, state: FSMContext, index: int):
 
     # Action buttons
     buttons.append([
-        InlineKeyboardButton(text="📋 Подробнее", callback_data=f"res_details:{resume['id']}"),
+        InlineKeyboardButton(text="📋 Подробнее", callback_data=f"res_details:{resume['id']}")
+    ])
+    buttons.append([
         InlineKeyboardButton(text="✉️ Пригласить", callback_data=f"res_invite:{resume['id']}")
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="⭐ В избранное", callback_data=f"fav:add:resume:{resume['id']}")
     ])
 
     buttons.append([InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_resume_search")])
@@ -224,7 +230,14 @@ def format_resume_card(resume: dict, index: int, total: int) -> str:
 
     if resume.get('desired_position'):
         lines.append(f"💼 {resume.get('desired_position')}")
-
+    if resume.get('citizenship'):
+        lines.append(f"🌍 {resume.get('citizenship')}")
+    if resume.get('birth_date'):
+        try:
+            birth_dt = datetime.strptime(resume['birth_date'], "%Y-%m-%d")
+            lines.append(f"🎂 {birth_dt.strftime('%d.%m.%Y')}")
+        except (ValueError, TypeError):
+            lines.append(f"🎂 {resume['birth_date']}")
     if resume.get('city'):
         location = resume.get('city')
         if resume.get('ready_to_relocate'):
@@ -246,6 +259,19 @@ def format_resume_card(resume: dict, index: int, total: int) -> str:
         if len(resume['skills']) > 3:
             skills += f" и ещё {len(resume['skills']) - 3}"
         lines.append(f"🎯 {skills}")
+
+    # Languages preview
+    if resume.get('languages'):
+        lang_items = [
+            f"{lang.get('language')} ({lang.get('level')})"
+            for lang in resume['languages'][:2]
+            if lang
+        ]
+        if lang_items:
+            lang_text = ", ".join(lang_items)
+            if len(resume['languages']) > 2:
+                lang_text += f" и ещё {len(resume['languages']) - 2}"
+            lines.append(f"🗣 {lang_text}")
 
     # About preview
     if resume.get('about'):
@@ -330,6 +356,15 @@ def format_resume_details(resume: dict) -> str:
 
     if resume.get('full_name'):
         lines.append(f"👤 <b>{resume.get('full_name')}</b>\n")
+    if resume.get('citizenship'):
+        lines.append(f"🌍 Гражданство: {resume.get('citizenship')}")
+    if resume.get('birth_date'):
+        try:
+            birth_dt = datetime.strptime(resume['birth_date'], "%Y-%m-%d")
+            lines.append(f"🎂 Дата рождения: {birth_dt.strftime('%d.%m.%Y')}")
+        except (ValueError, TypeError):
+            lines.append(f"🎂 Дата рождения: {resume.get('birth_date')}")
+    lines.append("")
 
     # Contact
     lines.append("<b>📞 КОНТАКТЫ</b>")
@@ -337,6 +372,10 @@ def format_resume_details(resume: dict) -> str:
         lines.append(f"Телефон: {resume.get('phone')}")
     if resume.get('email'):
         lines.append(f"Email: {resume.get('email')}")
+    if resume.get('telegram'):
+        lines.append(f"Telegram: {resume.get('telegram')}")
+    if resume.get('other_contacts'):
+        lines.append(f"Доп. контакты: {resume.get('other_contacts')}")
     lines.append("")
 
     # Position
@@ -379,6 +418,44 @@ def format_resume_details(resume: dict) -> str:
         if len(resume['skills']) > 10:
             skills_text += f" и ещё {len(resume['skills']) - 10}"
         lines.append(skills_text)
+        lines.append("")
+
+    # Languages
+    if resume.get('languages'):
+        lines.append("<b>🗣 ЯЗЫКИ</b>")
+        for lang in resume['languages']:
+            lines.append(f"• {lang.get('language')} - {lang.get('level')}")
+        lines.append("")
+
+    # Courses
+    if resume.get('courses'):
+        lines.append("<b>🎓 КУРСЫ</b>")
+        for course in resume['courses'][:5]:
+            course_line = course.get('name', 'Курс')
+            if course.get('organization'):
+                course_line += f", {course['organization']}"
+            if course.get('completion_year'):
+                course_line += f" ({course['completion_year']})"
+            lines.append(f"• {course_line}")
+        lines.append("")
+
+    # References
+    if resume.get('references'):
+        lines.append("<b>📇 РЕКОМЕНДАЦИИ</b>")
+        for reference in resume['references'][:3]:
+            ref_line = reference.get('full_name', 'Контакт')
+            if reference.get('position'):
+                ref_line += f", {reference['position']}"
+            if reference.get('company'):
+                ref_line += f", {reference['company']}"
+            contact_parts = []
+            if reference.get('phone'):
+                contact_parts.append(reference['phone'])
+            if reference.get('email'):
+                contact_parts.append(reference['email'])
+            if contact_parts:
+                ref_line += f" — {'; '.join(contact_parts)}"
+            lines.append(f"• {ref_line}")
         lines.append("")
 
     # About

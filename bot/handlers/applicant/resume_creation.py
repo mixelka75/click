@@ -30,10 +30,6 @@ from backend.models import User, Resume, WorkExperience, Education, Course, Lang
 from shared.constants import (
     UserRole,
     SalaryType,
-    EducationLevel,
-    EDUCATION_LEVELS,
-    LANGUAGES,
-    LANGUAGE_LEVELS,
 )
 from config.settings import settings
 
@@ -66,7 +62,94 @@ async def process_full_name(message: Message, state: FSMContext):
 
     await state.update_data(full_name=full_name)
     await message.answer(
-        f"Отлично, {full_name}!\n\n"
+        "<b>Укажите ваше гражданство</b>\n"
+        "Например: Россия",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.citizenship)
+
+
+@router.message(ResumeCreationStates.citizenship)
+async def process_citizenship(message: Message, state: FSMContext):
+    """Process citizenship information."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Как вас зовут?</b> (ФИО полностью)",
+            reply_markup=get_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.full_name)
+        return
+
+    citizenship = message.text.strip()
+    if citizenship.lower() == "пропустить":
+        await state.update_data(citizenship=None)
+        await message.answer(
+            "<b>Введите вашу дату рождения</b>\n"
+            "Формат: ДД.ММ.ГГГГ (например: 15.08.1995)",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.birth_date)
+        return
+
+    if len(citizenship) < 2:
+        await message.answer(
+            "Пожалуйста, укажите гражданство. Например: Россия."
+        )
+        return
+
+    await state.update_data(citizenship=citizenship)
+    await message.answer(
+        "<b>Введите вашу дату рождения</b>\n"
+        "Формат: ДД.ММ.ГГГГ (например: 15.08.1995)",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.birth_date)
+
+
+@router.message(ResumeCreationStates.birth_date)
+async def process_birth_date(message: Message, state: FSMContext):
+    """Process birth date."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Укажите ваше гражданство</b>\nНапример: Россия",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.citizenship)
+        return
+
+    birth_date_raw = message.text.strip()
+
+    if birth_date_raw.lower() == "пропустить":
+        await state.update_data(birth_date=None)
+        await message.answer(
+            f"Отлично!\n\n"
+            f"<b>В каком городе вы находитесь?</b>\n"
+            f"Например: Москва, Санкт-Петербург, Казань...",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.city)
+        return
+
+    try:
+        parsed = datetime.strptime(birth_date_raw, "%d.%m.%Y").date()
+    except ValueError:
+        await message.answer(
+            "Не получилось распознать дату. Укажите её в формате ДД.ММ.ГГГГ (например: 15.08.1995)."
+        )
+        return
+
+    await state.update_data(birth_date=parsed.isoformat())
+
+    await message.answer(
+        f"Отлично!\n\n"
         f"<b>В каком городе вы находитесь?</b>\n"
         f"Например: Москва, Санкт-Петербург, Казань...",
         reply_markup=get_back_cancel_keyboard()
@@ -211,6 +294,84 @@ async def process_email(message_or_callback, state: FSMContext):
         await state.update_data(email=email)
 
     await message.answer(
+        "<b>Укажите ссылку на ваш Telegram</b>\n"
+        "Можете отправить @username или https://t.me/...\n"
+        "Если не хотите указывать, напишите 'Пропустить'.",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.telegram)
+
+
+@router.message(ResumeCreationStates.telegram)
+async def process_telegram(message: Message, state: FSMContext):
+    """Process telegram contact."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "<b>Укажите ваш email</b>\n"
+            "(или нажмите кнопку ниже, чтобы пропустить)",
+            reply_markup=get_skip_button()
+        )
+        await state.set_state(ResumeCreationStates.email)
+        return
+
+    if text.lower() != "пропустить" and text:
+        telegram_value = text
+        if telegram_value.startswith("@"):  # normalize @username
+            telegram_value = telegram_value[1:]
+        if telegram_value.lower().startswith("t.me/"):
+            telegram_value = telegram_value.split("/", 1)[-1]
+        if telegram_value.startswith("http://"):
+            telegram_value = telegram_value.replace("http://", "https://", 1)
+
+        if telegram_value.startswith("https://"):
+            stored_telegram = telegram_value
+        else:
+            stored_telegram = f"https://t.me/{telegram_value}"
+
+        await state.update_data(telegram=stored_telegram)
+    else:
+        await state.update_data(telegram=None)
+
+    await message.answer(
+        "<b>Укажите дополнительные контакты</b>\n"
+        "Например: рабочий телефон, email, мессенджеры.\n"
+        "Если ничего добавлять не нужно, напишите 'Пропустить'.",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.other_contacts)
+
+
+@router.message(ResumeCreationStates.other_contacts)
+async def process_other_contacts(message: Message, state: FSMContext):
+    """Process additional contacts block."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "<b>Укажите ссылку на ваш Telegram</b>\n"
+            "Можете отправить @username или https://t.me/...\n"
+            "Если не хотите указывать, напишите 'Пропустить'.",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.telegram)
+        return
+
+    if text.lower() != "пропустить" and text:
+        await state.update_data(other_contacts=text)
+    else:
+        await state.update_data(other_contacts=None)
+
+    await message.answer(
         "<b>Какую должность вы ищете?</b>\n\nВыберите категорию:",
         reply_markup=get_position_categories_keyboard()
     )
@@ -260,23 +421,95 @@ async def process_position(callback: CallbackQuery, state: FSMContext):
 
     position = parts[1]
 
+    if position == "custom":
+        await state.set_state(ResumeCreationStates.position_custom)
+        await callback.message.answer(
+            "Напишите должность, которую хотите указать:",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        return
+
     await state.update_data(desired_position=position)
 
-    # Get category from state
+    await callback.message.answer(
+        "<b>Есть ли у выбранной должности специализация?</b>\n"
+        "Например: Банкетный менеджер, Старший официант.\n"
+        "Если специализации нет, напишите 'Пропустить'.",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.specialization)
+
+
+@router.message(ResumeCreationStates.position_custom)
+async def process_custom_position(message: Message, state: FSMContext):
+    """Handle custom position input."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        data = await state.get_data()
+        category = data.get("position_category")
+        await message.answer(
+            "<b>Выберите конкретную должность:</b>",
+            reply_markup=get_positions_keyboard(category)
+        )
+        await state.set_state(ResumeCreationStates.position)
+        return
+
+    if len(text) < 2:
+        await message.answer("Пожалуйста, укажите название должности.")
+        return
+
+    await state.update_data(desired_position=text)
+
+    await message.answer(
+        "<b>Есть ли у выбранной должности специализация?</b>\n"
+        "Например: Банкетный менеджер, Старший официант.\n"
+        "Если специализации нет, напишите 'Пропустить'.",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.specialization)
+
+
+@router.message(ResumeCreationStates.specialization)
+async def process_specialization(message: Message, state: FSMContext):
+    """Process optional specialization details."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        data = await state.get_data()
+        category = data.get("position_category")
+        await message.answer(
+            "<b>Выберите конкретную должность:</b>",
+            reply_markup=get_positions_keyboard(category)
+        )
+        await state.set_state(ResumeCreationStates.position)
+        return
+
+    if text.lower() != "пропустить" and text:
+        await state.update_data(specialization=text)
+    else:
+        await state.update_data(specialization=None)
+
     data = await state.get_data()
     category = data.get("position_category")
 
-    # If cook, ask for cuisines
     if category == "cook":
-        await callback.message.answer(
+        await message.answer(
             "<b>Выберите типы кухонь, с которыми работаете:</b>\n"
             "(можно выбрать несколько)",
             reply_markup=get_cuisines_keyboard(data.get("cuisines", []))
         )
         await state.set_state(ResumeCreationStates.cuisines)
     else:
-        # Skip cuisines, go to salary
-        await callback.message.answer(
+        await message.answer(
             "<b>Какую зарплату вы хотите получать?</b>\n"
             "Укажите сумму в рублях (например: 80000)\n"
             "Или нажмите кнопку ниже, чтобы пропустить",

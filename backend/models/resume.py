@@ -2,7 +2,7 @@
 Resume model for MongoDB.
 """
 
-from datetime import datetime, date
+from datetime import datetime
 from typing import Optional, List
 from beanie import Document, Indexed, Link
 from pydantic import BaseModel, Field
@@ -61,16 +61,19 @@ class Resume(Document):
     # Basic information
     full_name: str
     citizenship: Optional[str] = None
-    birth_date: Optional[date] = None
+    birth_date: Optional[str] = None  # ISO format YYYY-MM-DD
     city: str
     ready_to_relocate: bool = Field(default=False)
     ready_for_business_trips: bool = Field(default=False)
 
-    # Contact information
+    # Work format preferences
+    prefers_remote: Optional[bool] = None  # Wants to work remotely
+    prefers_office: Optional[bool] = None  # Wants to work in office
+    prefers_hybrid: Optional[bool] = None  # Wants hybrid format
+
+    # Contact information (for internal use only, not displayed publicly)
     phone: str
     email: Optional[str] = None
-    telegram: Optional[str] = None
-    other_contacts: Optional[str] = None
 
     # Photo
     photo_file_id: Optional[str] = None  # Telegram file_id for photo
@@ -113,6 +116,10 @@ class Resume(Document):
     status: ResumeStatus = Field(default=ResumeStatus.ACTIVE)
     is_published: bool = Field(default=False)
 
+    # Publication settings
+    publication_duration_days: Optional[int] = Field(default=30)
+    expires_at: Optional[datetime] = None
+
     # Analytics
     views_count: int = Field(default=0)
     responses_count: int = Field(default=0)
@@ -130,7 +137,12 @@ class Resume(Document):
             "position_category",
             "city",
             "status",
+            "is_published",
             "created_at",
+            "published_at",
+            [("is_published", 1), ("status", 1)],  # Composite index for filtering active resumes
+            [("position_category", 1), ("is_published", 1)],  # For category-based recommendations
+            [("city", 1), ("is_published", 1)],  # For location-based filtering
         ]
 
     class Config:

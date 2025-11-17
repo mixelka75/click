@@ -83,8 +83,11 @@ def format_resume_details(resume: Resume) -> str:
         lines.append(f"🌍 <b>Гражданство:</b> {resume.citizenship}")
     if resume.birth_date:
         try:
-            lines.append(f"🎂 <b>Дата рождения:</b> {resume.birth_date.strftime('%d.%m.%Y')}")
-        except AttributeError:
+            # birth_date is stored as ISO string YYYY-MM-DD
+            from datetime import datetime
+            birth_dt = datetime.strptime(resume.birth_date, "%Y-%m-%d")
+            lines.append(f"🎂 <b>Дата рождения:</b> {birth_dt.strftime('%d.%m.%Y')}")
+        except (ValueError, TypeError, AttributeError):
             lines.append(f"🎂 <b>Дата рождения:</b> {resume.birth_date}")
     lines.append(f"📍 <b>Город:</b> {resume.city}")
     if resume.ready_to_relocate:

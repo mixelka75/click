@@ -108,6 +108,13 @@ def get_back_cancel_keyboard() -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True)
 
 
+def get_skip_inline_button() -> InlineKeyboardMarkup:
+    """Inline skip button that can be removed after use."""
+    builder = InlineKeyboardBuilder()
+    builder.add(InlineKeyboardButton(text="⏭ Пропустить", callback_data="skip_field"))
+    return builder.as_markup()
+
+
 def get_confirm_publish_keyboard() -> InlineKeyboardMarkup:
     """Confirm publication keyboard."""
     builder = InlineKeyboardBuilder()
@@ -135,4 +142,17 @@ def get_pagination_keyboard(current_page: int, total_pages: int, prefix: str) ->
         buttons.append(InlineKeyboardButton(text="Вперед ▶️", callback_data=f"{prefix}:page:{current_page+1}"))
 
     builder.row(*buttons)
+    return builder.as_markup()
+
+
+def get_confirm_telegram_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard to confirm or change auto-detected Telegram contact."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Верно", callback_data="telegram:confirm"),
+        InlineKeyboardButton(text="✏️ Изменить", callback_data="telegram:change")
+    )
+    builder.row(
+        InlineKeyboardButton(text="⏭ Не указывать", callback_data="telegram:skip")
+    )
     return builder.as_markup()

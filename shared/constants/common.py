@@ -85,6 +85,7 @@ class SalaryType(str, Enum):
     """Salary calculation type."""
     GROSS = "До вычета налогов"
     NET = "На руки"
+    NEGOTIABLE = "По договоренности"
 
 
 # Benefits (дополнительные преимущества)

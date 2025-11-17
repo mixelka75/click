@@ -11,6 +11,7 @@ class VacancyCreationStates(StatesGroup):
     # Position information
     position_category = State()
     position = State()
+    position_custom = State()  # For custom position input
     specialization = State()  # For specific roles
     cuisines = State()  # For cooks
 
@@ -27,6 +28,7 @@ class VacancyCreationStates(StatesGroup):
     required_experience = State()
     required_education = State()
     required_skills = State()
+    custom_skills = State()  # For custom skills input
 
     # Job conditions
     has_employment_contract = State()

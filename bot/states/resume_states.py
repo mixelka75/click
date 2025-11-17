@@ -19,6 +19,7 @@ class ResumeCreationStates(StatesGroup):
     # Contact information
     phone = State()
     email = State()
+    telegram_confirm = State()  # Confirm auto-detected telegram
     telegram = State()
     other_contacts = State()
 

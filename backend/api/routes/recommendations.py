@@ -5,28 +5,45 @@ Recommendation system API endpoints.
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from backend.models import User, Vacancy, Resume
 from backend.api.dependencies import get_current_user
-from backend.services.recommendation_service import recommendation_service
+from backend.services.recommendation_service import (
+    recommendation_service,
+    VacancyRecommendation,
+    ResumeRecommendation,
+    MatchDetails,
+    RecommendationScore,
+)
 from shared.constants import UserRole
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
 
-@router.get("/vacancies-for-resume/{resume_id}")
+class MatchScoreResponse(BaseModel):
+    """Response model for match score calculation."""
+    resume_id: str
+    vacancy_id: str
+    score: float = Field(ge=0, le=100)
+    score_breakdown: RecommendationScore
+    match_details: MatchDetails
+
+
+@router.get("/vacancies-for-resume/{resume_id}", response_model=List[VacancyRecommendation])
 async def get_vacancy_recommendations(
     resume_id: str,
     limit: int = Query(10, ge=1, le=50),
     min_score: float = Query(40.0, ge=0, le=100),
     current_user: User = Depends(get_current_user)
-):
+) -> List[VacancyRecommendation]:
     """
     Get recommended vacancies for a specific resume.
 
     Returns list of vacancies sorted by match score with details:
     - Vacancy object
     - Match score (0-100)
+    - Score breakdown by category
     - Match details (skills matched, location match, etc.)
 
     Query parameters:
@@ -60,26 +77,27 @@ async def get_vacancy_recommendations(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting vacancy recommendations: {e}")
+        logger.error(f"Error getting vacancy recommendations: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve recommendations"
         )
 
 
-@router.get("/resumes-for-vacancy/{vacancy_id}")
+@router.get("/resumes-for-vacancy/{vacancy_id}", response_model=List[ResumeRecommendation])
 async def get_resume_recommendations(
     vacancy_id: str,
     limit: int = Query(10, ge=1, le=50),
     min_score: float = Query(40.0, ge=0, le=100),
     current_user: User = Depends(get_current_user)
-):
+) -> List[ResumeRecommendation]:
     """
     Get recommended resumes (candidates) for a specific vacancy.
 
     Returns list of resumes sorted by match score with details:
     - Resume object
     - Match score (0-100)
+    - Score breakdown by category
     - Match details (skills matched, location match, etc.)
 
     Query parameters:
@@ -113,26 +131,26 @@ async def get_resume_recommendations(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting resume recommendations: {e}")
+        logger.error(f"Error getting resume recommendations: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve recommendations"
         )
 
 
-@router.get("/match-score/{resume_id}/{vacancy_id}")
+@router.get("/match-score/{resume_id}/{vacancy_id}", response_model=MatchScoreResponse)
 async def get_match_score(
     resume_id: str,
     vacancy_id: str,
     current_user: User = Depends(get_current_user)
-):
+) -> MatchScoreResponse:
     """
     Calculate match score between a specific resume and vacancy.
 
     Returns:
     - Match score (0-100)
-    - Detailed breakdown by category
-    - Match details
+    - Detailed breakdown by category (position, skills, salary, etc.)
+    - Match details with specifics
     """
     try:
         # Get resume and vacancy
@@ -152,20 +170,20 @@ async def get_match_score(
             )
 
         # Calculate score
-        score = recommendation_service.calculate_match_score(resume, vacancy)
-        match_details = recommendation_service._get_match_details(resume, vacancy)
+        score, breakdown, details = recommendation_service.calculate_match_score(resume, vacancy)
 
-        return {
-            "resume_id": resume_id,
-            "vacancy_id": vacancy_id,
-            "score": round(score, 1),
-            "match_details": match_details
-        }
+        return MatchScoreResponse(
+            resume_id=resume_id,
+            vacancy_id=vacancy_id,
+            score=score,
+            score_breakdown=breakdown,
+            match_details=details
+        )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error calculating match score: {e}")
+        logger.error(f"Error calculating match score: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to calculate match score"

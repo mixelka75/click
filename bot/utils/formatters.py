@@ -7,6 +7,70 @@ from typing import List, Optional
 from backend.models import Resume, Vacancy, Response, WorkExperience
 
 
+# Translation maps for enum values
+COMPANY_TYPE_NAMES = {
+    "restaurant": "Ресторан",
+    "cafe": "Кафе",
+    "bar": "Бар",
+    "pub": "Паб",
+    "club": "Клуб",
+    "coffee_shop": "Кофейня",
+    "catering": "Общепит",
+    "events": "Кейтеринг",
+    "hotel": "Гостиница",
+    "resort": "Отель",
+    "bakery": "Пекарня",
+    "confectionery": "Кондитерская",
+}
+
+EMPLOYMENT_TYPE_NAMES = {
+    "full_time": "Полная занятость",
+    "part_time": "Частичная занятость",
+    "project": "Проектная работа",
+    "internship": "Стажировка",
+    "volunteer": "Волонтерство",
+}
+
+EXPERIENCE_LEVEL_NAMES = {
+    "no_experience": "Не требуется",
+    "1_year": "От 1 года",
+    "3_years": "От 3 лет",
+    "6_years": "Более 6 лет",
+}
+
+EDUCATION_LEVEL_NAMES = {
+    "not_required": "Не имеет значения",
+    "secondary": "Среднее",
+    "vocational": "Среднее специальное",
+    "higher": "Высшее",
+}
+
+SALARY_TYPE_NAMES = {
+    "gross": "До вычета налогов",
+    "net": "На руки",
+    "monthly": "В месяц",
+    "hourly": "В час",
+    "daily": "В день",
+}
+
+WORK_SCHEDULE_NAMES = {
+    "5/2": "5/2",
+    "2/2": "2/2",
+    "shift": "Сменный график",
+    "flexible": "Гибкий график",
+    "rotational": "Вахтовый метод",
+    "night": "Ночные смены",
+    "weekends": "Выходные дни",
+}
+
+
+def translate_value(value: str, mapping: dict) -> str:
+    """Translate enum value using provided mapping."""
+    if not value:
+        return value
+    return mapping.get(value, value)
+
+
 def format_resume_preview(data: dict) -> str:
     """Format resume data for preview."""
     lines = []
@@ -137,13 +201,20 @@ def format_vacancy_preview(data: dict) -> str:
 
     # Company
     if data.get("company_name"):
-        lines.append(f"🏢 <b>Компания:</b> {data['company_name']} ({data.get('company_type', '')})")
+        company_type = translate_value(data.get('company_type', ''), COMPANY_TYPE_NAMES)
+        lines.append(f"🏢 <b>Компания:</b> {data['company_name']} ({company_type})")
 
     if data.get("company_description"):
         desc = data["company_description"][:150]
         if len(data.get("company_description", "")) > 150:
             desc += "..."
         lines.append(f"   {desc}")
+
+    if data.get("company_size"):
+        lines.append(f"👥 <b>Размер:</b> {data['company_size']}")
+
+    if data.get("company_website"):
+        lines.append(f"🌐 <b>Сайт:</b> {data['company_website']}")
 
     # Location
     if data.get("city"):
@@ -163,28 +234,48 @@ def format_vacancy_preview(data: dict) -> str:
         if data.get("salary_max"):
             salary_parts.append(f"до {data['salary_max']:,}")
         salary_str = " ".join(salary_parts) + " руб."
-        salary_type = data.get("salary_type", "На руки")
+        salary_type = translate_value(data.get("salary_type", "net"), SALARY_TYPE_NAMES)
         lines.append(f"{salary_str} ({salary_type})")
 
     # Employment
     if data.get("employment_type"):
         lines.append(f"\n⏰ <b>ЗАНЯТОСТЬ И ГРАФИК</b>")
-        lines.append(f"Тип: {data['employment_type']}")
+        employment_type = translate_value(data['employment_type'], EMPLOYMENT_TYPE_NAMES)
+        lines.append(f"Тип: {employment_type}")
         if data.get("work_schedule"):
-            schedule = ", ".join(data["work_schedule"])
+            schedule_translated = [translate_value(s, WORK_SCHEDULE_NAMES) for s in data["work_schedule"]]
+            schedule = ", ".join(schedule_translated)
             lines.append(f"График: {schedule}")
 
     # Requirements
     lines.append(f"\n📋 <b>ТРЕБОВАНИЯ</b>")
     if data.get("required_experience"):
-        lines.append(f"• Опыт: {data['required_experience']}")
+        experience = translate_value(data['required_experience'], EXPERIENCE_LEVEL_NAMES)
+        lines.append(f"• Опыт: {experience}")
     if data.get("required_education"):
-        lines.append(f"• Образование: {data['required_education']}")
+        education = translate_value(data['required_education'], EDUCATION_LEVEL_NAMES)
+        lines.append(f"• Образование: {education}")
     if data.get("required_skills"):
         skills = ", ".join(data["required_skills"][:5])
         if len(data.get("required_skills", [])) > 5:
             skills += f" и ещё {len(data['required_skills']) - 5}"
         lines.append(f"• Навыки: {skills}")
+
+    # Job conditions
+    if data.get("has_employment_contract") or data.get("probation_duration") or data.get("allows_remote_work"):
+        lines.append(f"\n📋 <b>УСЛОВИЯ РАБОТЫ</b>")
+        if data.get("has_employment_contract"):
+            lines.append("• Трудовой договор: Да")
+        if data.get("probation_duration"):
+            lines.append(f"• Испытательный срок: {data['probation_duration']}")
+        if data.get("allows_remote_work"):
+            lines.append("• Возможна удаленная работа")
+
+    # Required documents
+    if data.get("required_documents"):
+        lines.append(f"\n📄 <b>ТРЕБУЕМЫЕ ДОКУМЕНТЫ</b>")
+        for doc in data["required_documents"]:
+            lines.append(f"• {doc}")
 
     # Benefits
     if data.get("benefits"):
@@ -201,6 +292,18 @@ def format_vacancy_preview(data: dict) -> str:
         if len(data.get("description", "")) > 200:
             desc += "..."
         lines.append(desc)
+
+    # Responsibilities
+    if data.get("responsibilities"):
+        lines.append(f"\n📋 <b>ОБЯЗАННОСТИ</b>")
+        responsibilities = data["responsibilities"]
+        if isinstance(responsibilities, list):
+            for resp in responsibilities[:5]:
+                lines.append(f"• {resp}")
+            if len(responsibilities) > 5:
+                lines.append(f"• ... и ещё {len(responsibilities) - 5}")
+        else:
+            lines.append(responsibilities)
 
     # Contact
     if data.get("contact_phone"):

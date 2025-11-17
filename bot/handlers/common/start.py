@@ -19,15 +19,80 @@ from bot.keyboards.positions import get_position_categories_keyboard
 router = Router()
 
 
+async def handle_deep_link(message: Message, state: FSMContext, user: User, param: str):
+    """Handle deep link from channel publication."""
+    try:
+        # Parse param: format is "resume_ID" or "vacancy_ID"
+        parts = param.split("_", 1)
+        if len(parts) != 2:
+            await message.answer("❌ Неверная ссылка. Попробуйте еще раз.")
+            return
+
+        entity_type, entity_id = parts
+
+        if entity_type == "resume":
+            # Employer clicked "Пригласить" on resume
+            if user.role != UserRole.EMPLOYER:
+                await message.answer(
+                    "❌ Эта функция доступна только работодателям.\n"
+                    "Пожалуйста, зарегистрируйтесь как работодатель."
+                )
+                return
+
+            await message.answer(
+                f"💼 <b>Приглашение кандидата</b>\n\n"
+                f"Вы собираетесь пригласить кандидата из резюме.\n\n"
+                f"ID резюме: <code>{entity_id}</code>\n\n"
+                f"Функция приглашения находится в разработке.\n"
+                f"Пока вы можете просмотреть резюме в разделе 'Поиск кандидатов'.",
+                reply_markup=get_main_menu_employer()
+            )
+
+        elif entity_type == "vacancy":
+            # Applicant clicked "Откликнуться" on vacancy
+            if user.role != UserRole.APPLICANT:
+                await message.answer(
+                    "❌ Эта функция доступна только соискателям.\n"
+                    "Пожалуйста, зарегистрируйтесь как соискатель."
+                )
+                return
+
+            await message.answer(
+                f"📬 <b>Отклик на вакансию</b>\n\n"
+                f"Вы собираетесь откликнуться на вакансию.\n\n"
+                f"ID вакансии: <code>{entity_id}</code>\n\n"
+                f"Функция отклика находится в разработке.\n"
+                f"Пока вы можете просмотреть вакансии в разделе 'Поиск работы'.",
+                reply_markup=get_main_menu_applicant()
+            )
+
+        else:
+            await message.answer("❌ Неверный тип ссылки.")
+
+    except Exception as e:
+        logger.error(f"Error handling deep link: {e}")
+        await message.answer("❌ Произошла ошибка. Попробуйте позже.")
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
-    """Handle /start command."""
-    await state.clear()
-
+    """Handle /start command with optional deep link."""
     telegram_id = message.from_user.id
+
+    # Parse deep link parameter (e.g., /start resume_123 or /start vacancy_456)
+    command_args = message.text.split(maxsplit=1)
+    deep_link_param = command_args[1] if len(command_args) > 1 else None
 
     # Check if user exists
     user = await User.find_one(User.telegram_id == telegram_id)
+
+    # Handle deep link if present and user exists
+    if deep_link_param and user:
+        await handle_deep_link(message, state, user, deep_link_param)
+        return
+
+    # Clear state for normal start flow
+    await state.clear()
 
     if user:
         # Existing user - show menu

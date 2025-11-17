@@ -4,7 +4,7 @@ Resume creation - final steps (skills, about, preview, publish).
 
 from aiogram import Router, F
 from bot.filters import IsNotMenuButton
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, LinkPreviewOptions
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
@@ -74,19 +74,39 @@ async def prompt_photo(message: Message, state: FSMContext) -> None:
 
 # ============ SKILLS ============
 
-@router.callback_query(ResumeCreationStates.skills, F.data.startswith("skill:"))
+@router.callback_query(ResumeCreationStates.skills)
 async def process_skills(callback: CallbackQuery, state: FSMContext):
     """Process skills selection."""
-    await callback.answer()
+    from loguru import logger
+    logger.error(f"🚨 CAUGHT CALLBACK in skills state: {callback.data}")
+    logger.warning(f"🔍 Skills callback: {callback.data}")
 
     data = await state.get_data()
     skills = data.get("skills", [])
     category = data.get("position_category")
 
+    # Clean up invalid skills (old format like 't:10')
+    original_count = len(skills)
+    skills = [s for s in skills if not s.startswith("t:")]
+    if len(skills) != original_count:
+        logger.warning(f"🔍 Cleaned {original_count - len(skills)} invalid skills")
+        await state.update_data(skills=skills)
+
+    logger.warning(f"🔍 Current skills (cleaned): {skills}, category: {category}")
+
     if callback.data == "skill:done":
+        logger.warning(f"🔍 Done button pressed, skills count: {len(skills)}")
+        await callback.answer()
+
         if not skills:
             await callback.answer("Выберите хотя бы один навык!", show_alert=True)
             return
+
+        # Удаляем кнопки выбора навыков
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
         await callback.message.answer(
             f"✅ Выбрано навыков: {len(skills)}\n\n"
@@ -95,19 +115,36 @@ async def process_skills(callback: CallbackQuery, state: FSMContext):
         return
 
     if callback.data == "skill:custom":
-        await callback.message.answer(
+        await callback.answer()
+        logger.warning(f"🔍 Custom skills button pressed")
+        # Удаляем кнопки выбора навыков
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        skip_msg = await callback.message.answer(
             "Введите дополнительные навыки через запятую:",
             reply_markup=get_skip_button()
         )
+        await state.update_data(custom_skills_skip_message_id=skip_msg.message_id)
         await state.set_state(ResumeCreationStates.custom_skills)
         return
 
     # Toggle skill
-    skill = callback.data.split(":", 2)[2]
-    if skill in skills:
-        skills.remove(skill)
-    else:
-        skills.append(skill)
+    # Format: skill:t:{idx}
+    await callback.answer()
+    parts = callback.data.split(":")
+    if parts[1] == "t":  # Toggle by index
+        from shared.constants import get_skills_for_position
+        idx = int(parts[2])
+        all_skills = get_skills_for_position(category)
+        if 0 <= idx < len(all_skills):
+            skill = all_skills[idx]
+            if skill in skills:
+                skills.remove(skill)
+            else:
+                skills.append(skill)
 
     await state.update_data(skills=skills)
 
@@ -126,12 +163,30 @@ async def process_custom_skills(message_or_callback, state: FSMContext):
     if isinstance(message_or_callback, CallbackQuery):
         await message_or_callback.answer()
         message = message_or_callback.message
+        # Удаляем кнопку "Пропустить"
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
     else:
         message = message_or_callback
         if message.text == "🚫 Отменить создание":
             await state.clear()
             await message.answer("Создание резюме отменено.")
             return
+
+        # Удаляем инлайн-кнопку из предыдущего сообщения
+        data = await state.get_data()
+        skip_message_id = data.get("custom_skills_skip_message_id")
+        if skip_message_id:
+            try:
+                await message.bot.edit_message_reply_markup(
+                    chat_id=message.chat.id,
+                    message_id=skip_message_id,
+                    reply_markup=None
+                )
+            except Exception:
+                pass
 
         # Parse comma-separated skills
         custom_skills = [s.strip() for s in message.text.split(",") if s.strip()]
@@ -167,6 +222,12 @@ async def process_custom_skills(message_or_callback, state: FSMContext):
 async def process_add_languages(callback: CallbackQuery, state: FSMContext):
     """Handle choice to add languages."""
     await callback.answer()
+
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     if callback.data == "confirm:no":
         await prompt_about(callback.message, state)
@@ -238,6 +299,12 @@ async def process_language_level(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(languages=languages, temp_language_name=None)
 
+    # Удаляем кнопки выбора уровня языка
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     await callback.message.answer(
         f"✅ Добавлен язык: {language_name} — {LANGUAGE_LEVELS[index]}\n\n"
         "<b>Добавить ещё один язык?</b>",
@@ -250,6 +317,12 @@ async def process_language_level(callback: CallbackQuery, state: FSMContext):
 async def process_language_more(callback: CallbackQuery, state: FSMContext):
     """Handle adding more languages."""
     await callback.answer()
+
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     if callback.data == "confirm:yes":
         await callback.message.answer(
@@ -274,6 +347,11 @@ async def process_about(message_or_callback, state: FSMContext):
     if isinstance(message_or_callback, CallbackQuery):
         await message_or_callback.answer()
         message = message_or_callback.message
+        # Удаляем кнопку "Пропустить"
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
     else:
         message = message_or_callback
         if message.text == "🚫 Отменить создание":
@@ -296,6 +374,12 @@ async def process_about(message_or_callback, state: FSMContext):
 async def process_add_references(callback: CallbackQuery, state: FSMContext):
     """Handle choice to add references."""
     await callback.answer()
+
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     if callback.data == "confirm:no":
         await prompt_photo(callback.message, state)
@@ -458,6 +542,12 @@ async def process_reference_more(callback: CallbackQuery, state: FSMContext):
     """Handle adding more references."""
     await callback.answer()
 
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     if callback.data == "confirm:yes":
         await callback.message.answer(
             "<b>ФИО рекомендателя:</b>",
@@ -477,13 +567,16 @@ async def process_photo(message: Message, state: FSMContext):
 
     await message.answer("✅ Фото добавлено!")
 
-    # Show preview
+    # Show preview with photo
     data = await state.get_data()
     preview_text = format_resume_preview(data)
 
-    await message.answer(
-        preview_text,
-        reply_markup=get_confirm_publish_keyboard()
+    # Send photo with caption
+    await message.answer_photo(
+        photo=photo.file_id,
+        caption=preview_text,
+        reply_markup=get_confirm_publish_keyboard(),
+        show_caption_above_media=True
     )
     await state.set_state(ResumeCreationStates.preview)
 
@@ -493,13 +586,20 @@ async def skip_photo(callback: CallbackQuery, state: FSMContext):
     """Skip photo."""
     await callback.answer()
 
+    # Удаляем кнопку "Пропустить"
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     # Show preview
     data = await state.get_data()
     preview_text = format_resume_preview(data)
 
     await callback.message.answer(
         preview_text,
-        reply_markup=get_confirm_publish_keyboard()
+        reply_markup=get_confirm_publish_keyboard(),
+        link_preview_options=LinkPreviewOptions(is_disabled=True)
     )
     await state.set_state(ResumeCreationStates.preview)
 
@@ -510,6 +610,13 @@ async def skip_photo(callback: CallbackQuery, state: FSMContext):
 async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
     """Handle preview actions."""
     await callback.answer()
+
+    # Удаляем кнопки предпросмотра (кроме случая publish:confirm, где текст изменяется)
+    if callback.data in ["publish:cancel", "publish:edit"]:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
     if callback.data == "publish:cancel":
         await state.clear()
@@ -527,7 +634,24 @@ async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
         return
 
     if callback.data == "publish:confirm":
-        await callback.message.edit_text("⏳ Публикую резюме...")
+        # Get data first to check if there's a photo
+        data = await state.get_data()
+
+        # Удаляем кнопки и изменяем текст
+        # If there's a photo, use edit_caption; otherwise use edit_text
+        try:
+            if data.get("photo_file_id"):
+                await callback.message.edit_caption(caption="⏳ Публикую резюме...")
+            else:
+                await callback.message.edit_text("⏳ Публикую резюме...")
+        except Exception as e:
+            logger.error(f"Failed to edit message: {e}")
+            # Fallback: delete and send new message
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer("⏳ Публикую резюме...")
 
         # Get user
         telegram_id = callback.from_user.id
@@ -537,9 +661,6 @@ async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
             await callback.message.answer("Ошибка: пользователь не найден.")
             await state.clear()
             return
-
-        # Get all data
-        data = await state.get_data()
 
         # Build base API URL (используем settings.api_url вместо хардкода backend:8000)
         base_url = settings.api_url  # Already includes host, port и префикс
@@ -557,9 +678,7 @@ async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
                     "ready_for_business_trips": data.get("ready_for_business_trips", False),
                     "phone": data.get("phone"),
                     "email": data.get("email"),
-                    "telegram": data.get("telegram"),
-                    "other_contacts": data.get("other_contacts"),
-                    "photo_file_id": data.get("photo_file_id"),  # Ignored серверной моделью, не критично
+                    "photo_file_id": data.get("photo_file_id"),
                     "desired_position": data.get("desired_position"),
                     "position_category": data.get("position_category"),
                     "desired_salary": data.get("desired_salary"),
@@ -586,6 +705,8 @@ async def handle_preview_action(callback: CallbackQuery, state: FSMContext):
                     resume_data["languages"] = data["languages"]
                 if data.get("references"):
                     resume_data["references"] = data["references"]
+                if data.get("specialization"):
+                    resume_data["specialization"] = data["specialization"]
 
                 create_url = f"{base_url}/resumes"
                 response = await client.post(create_url, json=resume_data, timeout=10.0)

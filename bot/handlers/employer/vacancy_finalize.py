@@ -4,7 +4,7 @@ Vacancy creation handlers - Part 3: Description, Preview, Publish.
 
 from aiogram import Router, F
 from bot.filters import IsNotMenuButton
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, LinkPreviewOptions
 from aiogram.fsm.context import FSMContext
 from loguru import logger
 import httpx
@@ -95,7 +95,8 @@ async def process_is_anonymous(callback: CallbackQuery, state: FSMContext):
     answer = callback.data.split(":")[1] == "yes"
     await state.update_data(is_anonymous=answer)
 
-    await callback.message.edit_text("✅ Настройки приватности сохранены")
+    # Удаляем кнопки Да/Нет
+    await callback.message.edit_text("✅ Настройки приватности сохранены", reply_markup=None)
 
     await callback.message.answer(
         "<b>На сколько дней опубликовать вакансию?</b>",
@@ -127,14 +128,16 @@ async def process_publication_duration(callback: CallbackQuery, state: FSMContex
     duration = int(callback.data.split(":")[1])
     await state.update_data(publication_duration_days=duration)
 
-    await callback.message.edit_text(f"✅ Вакансия будет опубликована на {duration} дней")
+    # Удаляем кнопки выбора длительности
+    await callback.message.edit_text(f"✅ Вакансия будет опубликована на {duration} дней", reply_markup=None)
 
     # Generate preview
     data = await state.get_data()
     preview_text = format_vacancy_preview(data)
 
     await callback.message.answer(
-        "📋 <b>Превью вакансии:</b>\n\n" + preview_text
+        preview_text,
+        link_preview_options=LinkPreviewOptions(is_disabled=True)
     )
 
     await callback.message.answer(
@@ -203,10 +206,6 @@ async def process_publish_confirm(callback: CallbackQuery, state: FSMContext):
         "required_documents": data.get("required_documents", []),
         "description": data.get("description"),
         "responsibilities": data.get("responsibilities", []),
-        "contact_person_name": data.get("contact_person_name"),
-        "contact_person_position": data.get("contact_person_position"),
-        "contact_email": data.get("contact_email"),
-        "contact_phone": data.get("contact_phone"),
         "is_anonymous": data.get("is_anonymous", False),
         "publication_duration_days": data.get("publication_duration_days", 30),
     }
@@ -229,7 +228,14 @@ async def process_publish_confirm(callback: CallbackQuery, state: FSMContext):
 
             if response.status_code == 201:
                 vacancy = response.json()
-                vacancy_id = vacancy["id"]
+                logger.info(f"Vacancy response: {vacancy.keys()}")
+
+                # Beanie returns _id, but it might be serialized as id or _id
+                vacancy_id = vacancy.get("id") or vacancy.get("_id")
+
+                if not vacancy_id:
+                    logger.error(f"No ID found in vacancy response: {vacancy}")
+                    raise Exception("Vacancy ID not found in response")
 
                 logger.info(f"Vacancy {vacancy_id} created successfully")
 
@@ -281,6 +287,12 @@ async def process_publish_edit(callback: CallbackQuery, state: FSMContext):
     """Handle edit request."""
     await callback.answer()
 
+    # Удаляем кнопки подтверждения из предыдущего сообщения
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     await callback.message.answer(
         "✏️ <b>Редактирование</b>\n\n"
         "К сожалению, функция редактирования пока в разработке.\n"
@@ -296,6 +308,12 @@ async def process_publish_edit(callback: CallbackQuery, state: FSMContext):
 async def process_publish_cancel(callback: CallbackQuery, state: FSMContext):
     """Handle publish cancellation."""
     await callback.answer()
+
+    # Удаляем кнопки подтверждения
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     # Check if this is first vacancy creation
     data = await state.get_data()

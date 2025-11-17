@@ -3,12 +3,12 @@ Resume endpoints.
 """
 
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date as date_type, timedelta
 from fastapi import APIRouter, HTTPException, status, Query, Body
 from beanie import PydanticObjectId
 from pydantic import BaseModel
 
-from backend.models import Resume, User, WorkExperience, Education
+from backend.models import Resume, User, WorkExperience, Education, Course, Language as LangModel, Reference
 from backend.services import telegram_publisher
 from shared.constants import ResumeStatus
 
@@ -20,6 +20,8 @@ class ResumeCreateRequest(BaseModel):
     """Request model for creating resume."""
     user_id: str
     full_name: str
+    citizenship: Optional[str] = None
+    birth_date: Optional[str] = None  # ISO format YYYY-MM-DD
     city: str
     phone: str
     desired_position: str
@@ -27,6 +29,7 @@ class ResumeCreateRequest(BaseModel):
     ready_to_relocate: Optional[bool] = False
     ready_for_business_trips: Optional[bool] = False
     email: Optional[str] = None
+    photo_file_id: Optional[str] = None
     desired_salary: Optional[int] = None
     salary_type: Optional[str] = None
     work_schedule: Optional[List[str]] = None
@@ -35,6 +38,11 @@ class ResumeCreateRequest(BaseModel):
     cuisines: Optional[List[str]] = None
     work_experience: Optional[List[dict]] = None
     education: Optional[List[dict]] = None
+    courses: Optional[List[dict]] = None
+    languages: Optional[List[dict]] = None
+    references: Optional[List[dict]] = None
+    specialization: Optional[str] = None
+    publication_duration_days: Optional[int] = 30
 
 
 @router.post(
@@ -54,6 +62,10 @@ async def create_resume(request: ResumeCreateRequest):
         )
 
     resume_data = request.dict(exclude={"user_id"})
+
+    # Set expiration date
+    publication_duration = resume_data.pop("publication_duration_days", 30)
+    expires_at = datetime.utcnow() + timedelta(days=publication_duration)
 
     # Convert work_experience dicts to WorkExperience objects
     if resume_data.get("work_experience"):
@@ -83,6 +95,48 @@ async def create_resume(request: ResumeCreateRequest):
     else:
         resume_data["education"] = []
 
+    # Convert courses dicts to Course objects
+    if resume_data.get("courses"):
+        try:
+            resume_data["courses"] = [
+                Course(**course) for course in resume_data["courses"]
+            ]
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid courses data: {str(e)}"
+            )
+    else:
+        resume_data["courses"] = []
+
+    # Convert languages dicts to Language objects
+    if resume_data.get("languages"):
+        try:
+            resume_data["languages"] = [
+                LangModel(**lang) for lang in resume_data["languages"]
+            ]
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid languages data: {str(e)}"
+            )
+    else:
+        resume_data["languages"] = []
+
+    # Convert references dicts to Reference objects
+    if resume_data.get("references"):
+        try:
+            resume_data["references"] = [
+                Reference(**ref) for ref in resume_data["references"]
+            ]
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid references data: {str(e)}"
+            )
+    else:
+        resume_data["references"] = []
+
     # Ensure all list fields are not None
     list_fields = ["work_schedule", "skills", "cuisines"]
     for field in list_fields:
@@ -98,9 +152,14 @@ async def create_resume(request: ResumeCreateRequest):
         if resume_data.get(field) is None:
             resume_data[field] = False
 
+    # Note: birth_date will be automatically converted by Pydantic from string to date
+    # Keep it as string in resume_data, Beanie/Pydantic will handle the conversion
+
     try:
         resume = Resume(
             user=user,
+            publication_duration_days=publication_duration,
+            expires_at=expires_at,
             **resume_data
         )
         await resume.insert()
@@ -244,7 +303,10 @@ async def publish_resume(resume_id: PydanticObjectId):
     summary="Archive resume"
 )
 async def archive_resume(resume_id: PydanticObjectId):
-    """Archive resume (hide from search)."""
+    """Archive resume (hide from search and remove from channels)."""
+    from backend.models import Publication
+    from loguru import logger
+
     resume = await Resume.get(resume_id)
     if not resume:
         raise HTTPException(
@@ -256,6 +318,21 @@ async def archive_resume(resume_id: PydanticObjectId):
     resume.is_published = False
     await resume.save()
 
+    # Delete all publications from channels
+    publications = await Publication.find(
+        {"resume.$id": resume_id},
+        Publication.is_published == True,
+        Publication.is_deleted == False
+    ).to_list()
+
+    for pub in publications:
+        try:
+            deleted = await telegram_publisher.delete_publication(pub)
+            if deleted:
+                logger.info(f"Deleted publication {pub.id} from channel {pub.channel_name}")
+        except Exception as e:
+            logger.error(f"Failed to delete publication {pub.id}: {e}")
+
     return resume
 
 
@@ -265,13 +342,31 @@ async def archive_resume(resume_id: PydanticObjectId):
     summary="Delete resume"
 )
 async def delete_resume(resume_id: PydanticObjectId):
-    """Delete resume permanently."""
+    """Delete resume permanently and remove from channels."""
+    from backend.models import Publication
+    from loguru import logger
+
     resume = await Resume.get(resume_id)
     if not resume:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Resume not found"
         )
+
+    # Find and delete all publications for this resume
+    publications = await Publication.find(
+        {"resume.$id": resume_id},
+        Publication.is_published == True,
+        Publication.is_deleted == False
+    ).to_list()
+
+    for pub in publications:
+        try:
+            deleted = await telegram_publisher.delete_publication(pub)
+            if deleted:
+                logger.info(f"Deleted publication {pub.id} from channel {pub.channel_name}")
+        except Exception as e:
+            logger.error(f"Failed to delete publication {pub.id}: {e}")
 
     await resume.delete()
 

@@ -75,11 +75,29 @@ async def process_salary(message_or_callback, state: FSMContext):
     if isinstance(message_or_callback, CallbackQuery):
         await message_or_callback.answer()
         message = message_or_callback.message
+        # Удаляем кнопку "Пропустить"
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
     else:
         message = message_or_callback
         if message.text == "🚫 Отменить создание":
             await handle_cancel_resume(message, state)
             return
+
+        # Удаляем инлайн-кнопку из предыдущего сообщения если пользователь ввел зарплату
+        data = await state.get_data()
+        skip_message_id = data.get("salary_skip_message_id")
+        if skip_message_id:
+            try:
+                await message.bot.edit_message_reply_markup(
+                    chat_id=message.chat.id,
+                    message_id=skip_message_id,
+                    reply_markup=None
+                )
+            except Exception:
+                pass
 
         try:
             salary = int(message.text.strip().replace(" ", "").replace(",", ""))
@@ -128,6 +146,12 @@ async def process_salary_type(callback: CallbackQuery, state: FSMContext):
     salary_type_text = "До вычета налогов" if salary_type == SalaryType.GROSS else "На руки"
     await state.update_data(salary_type=salary_type.value)
 
+    # Удаляем кнопки выбора типа зарплаты
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     data = await state.get_data()
     await callback.message.answer(
         f"✅ Зарплата: {data['desired_salary']:,} руб. ({salary_type_text})\n\n"
@@ -150,6 +174,12 @@ async def process_work_schedule(callback: CallbackQuery, state: FSMContext):
         if not schedules:
             await callback.answer("Выберите хотя бы один график!", show_alert=True)
             return
+
+        # Удаляем кнопки выбора графика
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
 
         await callback.message.answer(
             f"✅ Выбрано графиков: {len(schedules)}\n\n"
@@ -181,6 +211,12 @@ async def process_work_schedule(callback: CallbackQuery, state: FSMContext):
 async def ask_add_work_experience(callback: CallbackQuery, state: FSMContext):
     """Ask if user wants to add work experience."""
     await callback.answer()
+
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     if callback.data == "confirm:yes":
         await callback.message.answer(
@@ -266,6 +302,11 @@ async def process_work_start_date(message_or_callback, state: FSMContext):
     if isinstance(message_or_callback, CallbackQuery):
         await message_or_callback.answer()
         message = message_or_callback.message
+        # Удаляем кнопку "Пропустить"
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
     else:
         message = message_or_callback
         if message.text == "🚫 Отменить создание":
@@ -299,6 +340,11 @@ async def process_work_end_date(message_or_callback, state: FSMContext):
         await message_or_callback.answer()
         message = message_or_callback.message
         end_date = "по настоящее время"
+        # Удаляем кнопку "По настоящее время"
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
     else:
         message = message_or_callback
         if message.text == "🚫 Отменить создание":
@@ -309,11 +355,12 @@ async def process_work_end_date(message_or_callback, state: FSMContext):
 
     await state.update_data(temp_end_date=end_date or "по настоящее время")
 
-    await message.answer(
+    resp_skip_msg = await message.answer(
         "<b>Опишите ваши обязанности и достижения:</b>\n"
         "(или нажмите кнопку ниже, чтобы пропустить)",
         reply_markup=get_skip_button()
     )
+    await state.update_data(resp_skip_message_id=resp_skip_msg.message_id)
     await state.set_state(ResumeCreationStates.work_experience_responsibilities)
 
 
@@ -326,11 +373,29 @@ async def process_work_responsibilities(message_or_callback, state: FSMContext):
     if isinstance(message_or_callback, CallbackQuery):
         await message_or_callback.answer()
         message = message_or_callback.message
+        # Удаляем кнопку "Пропустить"
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
     else:
         message = message_or_callback
         if message.text == "🚫 Отменить создание":
             await handle_cancel_resume(message, state)
             return
+
+        # Удаляем инлайн-кнопку из предыдущего сообщения
+        data = await state.get_data()
+        skip_message_id = data.get("resp_skip_message_id")
+        if skip_message_id:
+            try:
+                await message.bot.edit_message_reply_markup(
+                    chat_id=message.chat.id,
+                    message_id=skip_message_id,
+                    reply_markup=None
+                )
+            except Exception:
+                pass
 
         responsibilities = message.text.strip()
 
@@ -399,6 +464,12 @@ async def ask_more_work_experience(callback: CallbackQuery, state: FSMContext):
     """Ask if user wants to add more work experience."""
     await callback.answer()
 
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     if callback.data == "confirm:yes":
         await callback.message.answer(
             "💼 <b>Следующее место работы</b>\n\n"
@@ -421,6 +492,12 @@ async def ask_more_work_experience(callback: CallbackQuery, state: FSMContext):
 async def ask_add_education(callback: CallbackQuery, state: FSMContext):
     """Ask if user wants to add education."""
     await callback.answer()
+
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     if callback.data == "confirm:no":
         await proceed_to_courses(callback.message, state)
@@ -446,6 +523,12 @@ async def process_education_level(callback: CallbackQuery, state: FSMContext):
 
     level = callback.data.split(":", 1)[1]
     await state.update_data(temp_education_level=level)
+
+    # Удаляем кнопки выбора уровня образования
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     await callback.message.answer(
         "<b>Название учебного заведения:</b>",
@@ -587,6 +670,12 @@ async def process_education_more(callback: CallbackQuery, state: FSMContext):
     """Handle request to add more education entries."""
     await callback.answer()
 
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
     if callback.data == "confirm:yes":
         builder = InlineKeyboardBuilder()
         for level in EDUCATION_LEVEL_OPTIONS:
@@ -610,6 +699,12 @@ async def process_education_more(callback: CallbackQuery, state: FSMContext):
 async def process_add_courses(callback: CallbackQuery, state: FSMContext):
     """Ask user to add courses or skip."""
     await callback.answer()
+
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     if callback.data == "confirm:no":
         await proceed_to_skills(callback.message, state)
@@ -736,6 +831,12 @@ async def process_course_year(message: Message, state: FSMContext):
 async def process_more_courses(callback: CallbackQuery, state: FSMContext):
     """Handle additional courses selection."""
     await callback.answer()
+
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     if callback.data == "confirm:yes":
         await callback.message.answer(

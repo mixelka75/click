@@ -26,7 +26,7 @@ def get_position_categories_keyboard() -> InlineKeyboardMarkup:
     for category, name in POSITION_CATEGORY_NAMES.items():
         builder.add(InlineKeyboardButton(
             text=name,
-            callback_data=f"position_cat:{category}"
+            callback_data=f"position_cat:{category.value}"  # Use .value to get string value from enum
         ))
 
     # Arrange in 2 columns
@@ -45,15 +45,16 @@ def get_positions_keyboard(category: str, show_all_option: bool = False) -> Inli
             callback_data="position:all"
         ))
 
+    # Use string keys for direct matching
     positions_map = {
-        PositionCategory.BARMAN: BARMAN_POSITIONS,
-        PositionCategory.WAITER: WAITER_POSITIONS,
-        PositionCategory.COOK: COOK_POSITIONS,
-        PositionCategory.BARISTA: BARISTA_POSITIONS,
-        PositionCategory.SUPPORT: SUPPORT_POSITIONS,
+        "barman": BARMAN_POSITIONS,
+        "waiter": WAITER_POSITIONS,
+        "cook": COOK_POSITIONS,
+        "barista": BARISTA_POSITIONS,
+        "support": SUPPORT_POSITIONS,
     }
 
-    if category == PositionCategory.MANAGEMENT:
+    if category == "management":
         # Management has subcategories
         for subcategory, positions in MANAGEMENT_POSITIONS.items():
             for position in positions:
@@ -61,6 +62,9 @@ def get_positions_keyboard(category: str, show_all_option: bool = False) -> Inli
                     text=position,
                     callback_data=f"position:{position}"
                 ))
+    elif category == "other":
+        # For OTHER category, no predefined positions - show custom input option directly
+        pass
     else:
         positions = positions_map.get(category, [])
         for position in positions:
@@ -93,12 +97,12 @@ def get_cuisines_keyboard(selected_cuisines: List[str] = None) -> InlineKeyboard
 
     builder = InlineKeyboardBuilder()
 
-    for cuisine in CUISINES:
+    for idx, cuisine in enumerate(CUISINES):
         # Add checkmark if selected
         prefix = "✅ " if cuisine in selected_cuisines else ""
         builder.add(InlineKeyboardButton(
             text=f"{prefix}{cuisine}",
-            callback_data=f"cuisine:{cuisine}"
+            callback_data=f"cuisine:{idx}"  # Use index instead of full name
         ))
 
     # Arrange in 2 columns
@@ -145,18 +149,21 @@ def get_work_schedule_keyboard(selected: List[str] = None) -> InlineKeyboardMark
 def get_skills_keyboard(category: str, selected: List[str] = None) -> InlineKeyboardMarkup:
     """Keyboard for selecting skills (multiple choice)."""
     from shared.constants import get_skills_for_position
+    from loguru import logger
 
     if selected is None:
         selected = []
 
+    logger.warning(f"🔍 get_skills_keyboard: category={category}, selected={selected}")
+
     builder = InlineKeyboardBuilder()
 
     skills = get_skills_for_position(category)
-    for skill in skills:
+    for idx, skill in enumerate(skills):
         prefix = "✅ " if skill in selected else ""
         builder.add(InlineKeyboardButton(
             text=f"{prefix}{skill}",
-            callback_data=f"skill:toggle:{skill}"
+            callback_data=f"skill:t:{idx}"  # Use index instead of full skill name
         ))
 
     builder.adjust(2)
@@ -169,9 +176,12 @@ def get_skills_keyboard(category: str, selected: List[str] = None) -> InlineKeyb
 
     # Add done button if at least one selected
     if selected:
+        logger.warning(f"🔍 Adding 'Done' button, selected count: {len(selected)}")
         builder.row(InlineKeyboardButton(
             text="✅ Готово",
             callback_data="skill:done"
         ))
+    else:
+        logger.warning(f"🔍 NO 'Done' button - no skills selected")
 
     return builder.as_markup()

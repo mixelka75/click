@@ -39,7 +39,7 @@ class VacancyCreateRequest(BaseModel):
     required_skills: Optional[List[str]] = None
     has_employment_contract: Optional[bool] = False
     has_probation_period: Optional[bool] = False
-    probation_duration: Optional[int] = None
+    probation_duration: Optional[str] = None  # Format: "1 месяц", "3 месяца"
     allows_remote_work: Optional[bool] = False
     benefits: Optional[List[str]] = None
     required_documents: Optional[List[str]] = None
@@ -249,7 +249,10 @@ async def publish_vacancy(vacancy_id: PydanticObjectId):
     summary="Pause vacancy"
 )
 async def pause_vacancy(vacancy_id: PydanticObjectId):
-    """Pause vacancy (temporarily hide from search)."""
+    """Pause vacancy (temporarily hide from search and remove from channels)."""
+    from backend.models import Publication
+    from loguru import logger
+
     vacancy = await Vacancy.get(vacancy_id)
     if not vacancy:
         raise HTTPException(
@@ -260,6 +263,21 @@ async def pause_vacancy(vacancy_id: PydanticObjectId):
     vacancy.status = VacancyStatus.PAUSED
     await vacancy.save()
 
+    # Delete all publications from channels
+    publications = await Publication.find(
+        {"vacancy.$id": vacancy_id},
+        Publication.is_published == True,
+        Publication.is_deleted == False
+    ).to_list()
+
+    for pub in publications:
+        try:
+            deleted = await telegram_publisher.delete_publication(pub)
+            if deleted:
+                logger.info(f"Deleted publication {pub.id} from channel {pub.channel_name}")
+        except Exception as e:
+            logger.error(f"Failed to delete publication {pub.id}: {e}")
+
     return vacancy
 
 
@@ -269,7 +287,10 @@ async def pause_vacancy(vacancy_id: PydanticObjectId):
     summary="Archive vacancy"
 )
 async def archive_vacancy(vacancy_id: PydanticObjectId):
-    """Archive vacancy (hide from search permanently)."""
+    """Archive vacancy (hide from search permanently and remove from channels)."""
+    from backend.models import Publication
+    from loguru import logger
+
     vacancy = await Vacancy.get(vacancy_id)
     if not vacancy:
         raise HTTPException(
@@ -281,6 +302,21 @@ async def archive_vacancy(vacancy_id: PydanticObjectId):
     vacancy.is_published = False
     await vacancy.save()
 
+    # Delete all publications from channels
+    publications = await Publication.find(
+        {"vacancy.$id": vacancy_id},
+        Publication.is_published == True,
+        Publication.is_deleted == False
+    ).to_list()
+
+    for pub in publications:
+        try:
+            deleted = await telegram_publisher.delete_publication(pub)
+            if deleted:
+                logger.info(f"Deleted publication {pub.id} from channel {pub.channel_name}")
+        except Exception as e:
+            logger.error(f"Failed to delete publication {pub.id}: {e}")
+
     return vacancy
 
 
@@ -290,13 +326,31 @@ async def archive_vacancy(vacancy_id: PydanticObjectId):
     summary="Delete vacancy"
 )
 async def delete_vacancy(vacancy_id: PydanticObjectId):
-    """Delete vacancy permanently."""
+    """Delete vacancy permanently and remove from channels."""
+    from backend.models import Publication
+    from loguru import logger
+
     vacancy = await Vacancy.get(vacancy_id)
     if not vacancy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Vacancy not found"
         )
+
+    # Find and delete all publications for this vacancy
+    publications = await Publication.find(
+        {"vacancy.$id": vacancy_id},
+        Publication.is_published == True,
+        Publication.is_deleted == False
+    ).to_list()
+
+    for pub in publications:
+        try:
+            deleted = await telegram_publisher.delete_publication(pub)
+            if deleted:
+                logger.info(f"Deleted publication {pub.id} from channel {pub.channel_name}")
+        except Exception as e:
+            logger.error(f"Failed to delete publication {pub.id}: {e}")
 
     await vacancy.delete()
 

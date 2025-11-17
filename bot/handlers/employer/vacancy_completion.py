@@ -64,9 +64,11 @@ async def process_salary_negotiable(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(salary_min=None, salary_max=None, salary_type=SalaryType.NEGOTIABLE)
 
+    # Удаляем кнопку "По договоренности"
     await callback.message.edit_text(
         "✅ Зарплата: по договоренности\n\n"
-        "Теперь укажите тип занятости:"
+        "Теперь укажите тип занятости:",
+        reply_markup=None
     )
 
     # Skip to employment type
@@ -121,9 +123,8 @@ def get_salary_type_keyboard():
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
     buttons = [
-        [InlineKeyboardButton(text="📅 В месяц", callback_data="salary_type:monthly")],
-        [InlineKeyboardButton(text="📆 За смену", callback_data="salary_type:daily")],
-        [InlineKeyboardButton(text="⏰ В час", callback_data="salary_type:hourly")]
+        [InlineKeyboardButton(text="💰 На руки", callback_data=f"salary_type:{SalaryType.NET.value}")],
+        [InlineKeyboardButton(text="📊 До вычета налогов", callback_data=f"salary_type:{SalaryType.GROSS.value}")]
     ]
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -137,7 +138,8 @@ async def process_salary_type(callback: CallbackQuery, state: FSMContext):
     salary_type = callback.data.split(":")[1]
     await state.update_data(salary_type=salary_type)
 
-    await callback.message.edit_text("✅ Период выплаты указан")
+    # Удаляем кнопки выбора периода
+    await callback.message.edit_text("✅ Период выплаты указан", reply_markup=None)
 
     await callback.message.answer(
         "<b>Выберите тип занятости:</b>",
@@ -154,8 +156,7 @@ def get_employment_type_keyboard():
         [InlineKeyboardButton(text="👔 Полная занятость", callback_data="employment:full_time")],
         [InlineKeyboardButton(text="⏰ Частичная занятость", callback_data="employment:part_time")],
         [InlineKeyboardButton(text="📋 Проектная работа", callback_data="employment:project")],
-        [InlineKeyboardButton(text="🎓 Стажировка", callback_data="employment:internship")],
-        [InlineKeyboardButton(text="🔄 Подработка", callback_data="employment:side_job")]
+        [InlineKeyboardButton(text="🎓 Стажировка", callback_data="employment:internship")]
     ]
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -169,7 +170,8 @@ async def process_employment_type(callback: CallbackQuery, state: FSMContext):
     employment_type = callback.data.split(":")[1]
     await state.update_data(employment_type=employment_type)
 
-    await callback.message.edit_text("✅ Тип занятости указан")
+    # Удаляем кнопки типа занятости
+    await callback.message.edit_text("✅ Тип занятости указан", reply_markup=None)
 
     await callback.message.answer(
         "<b>Выберите график работы:</b>\n"
@@ -247,7 +249,8 @@ async def process_schedule_done(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Выберите хотя бы один график работы", show_alert=True)
         return
 
-    await callback.message.edit_text("✅ График работы указан")
+    # Удаляем кнопки выбора графика
+    await callback.message.edit_text("✅ График работы указан", reply_markup=None)
 
     await callback.message.answer(
         "<b>Какой опыт работы требуется?</b>",
@@ -261,11 +264,10 @@ def get_experience_keyboard():
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
     buttons = [
-        [InlineKeyboardButton(text="🎓 Без опыта", callback_data="exp:no_experience")],
+        [InlineKeyboardButton(text="🎓 Не требуется", callback_data="exp:no_experience")],
         [InlineKeyboardButton(text="📅 От 1 года", callback_data="exp:1_year")],
-        [InlineKeyboardButton(text="📅 От 2 лет", callback_data="exp:2_years")],
         [InlineKeyboardButton(text="📅 От 3 лет", callback_data="exp:3_years")],
-        [InlineKeyboardButton(text="📅 От 5 лет", callback_data="exp:5_years")]
+        [InlineKeyboardButton(text="📅 Более 6 лет", callback_data="exp:6_years")]
     ]
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -279,7 +281,8 @@ async def process_required_experience(callback: CallbackQuery, state: FSMContext
     experience = callback.data.split(":")[1]
     await state.update_data(required_experience=experience)
 
-    await callback.message.edit_text("✅ Требуемый опыт указан")
+    # Удаляем кнопки опыта
+    await callback.message.edit_text("✅ Требуемый опыт указан", reply_markup=None)
 
     await callback.message.answer(
         "<b>Какое образование требуется?</b>",
@@ -293,11 +296,10 @@ def get_education_keyboard():
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
     buttons = [
-        [InlineKeyboardButton(text="📚 Не важно", callback_data="edu:not_required")],
+        [InlineKeyboardButton(text="📚 Не имеет значения", callback_data="edu:not_required")],
         [InlineKeyboardButton(text="🎓 Среднее", callback_data="edu:secondary")],
         [InlineKeyboardButton(text="🎓 Среднее специальное", callback_data="edu:vocational")],
-        [InlineKeyboardButton(text="🎓 Высшее", callback_data="edu:higher")],
-        [InlineKeyboardButton(text="🎓 Профильное высшее", callback_data="edu:specialized_higher")]
+        [InlineKeyboardButton(text="🎓 Высшее", callback_data="edu:higher")]
     ]
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -311,7 +313,8 @@ async def process_required_education(callback: CallbackQuery, state: FSMContext)
     education = callback.data.split(":")[1]
     await state.update_data(required_education=education)
 
-    await callback.message.edit_text("✅ Требования к образованию указаны")
+    # Удаляем кнопки образования
+    await callback.message.edit_text("✅ Требования к образованию указаны", reply_markup=None)
 
     # Ask about skills
     data = await state.get_data()
@@ -325,41 +328,130 @@ async def process_required_education(callback: CallbackQuery, state: FSMContext)
     await state.set_state(VacancyCreationStates.required_skills)
 
 
-@router.callback_query(VacancyCreationStates.required_skills, F.data.startswith("skill:"))
-async def process_skill_toggle(callback: CallbackQuery, state: FSMContext):
-    """Toggle skill selection."""
-    await callback.answer()
+# IMPORTANT: Specific handlers MUST come BEFORE general handlers!
+# Put skill:done and skill:custom handlers BEFORE the general skill: handler
 
-    skill = callback.data.split(":", 1)[1]
-    data = await state.get_data()
-    skills = data.get("required_skills", [])
-
-    if skill in skills:
-        skills.remove(skill)
-    else:
-        skills.append(skill)
-
-    await state.update_data(required_skills=skills)
-
-    # Update keyboard
-    category = data.get("position_category")
-    await callback.message.edit_reply_markup(
-        reply_markup=get_skills_keyboard(category, selected_skills=skills)
-    )
-
-
-@router.callback_query(VacancyCreationStates.required_skills, F.data == "skills_done")
+@router.callback_query(VacancyCreationStates.required_skills, F.data == "skill:done")
 async def process_skills_done(callback: CallbackQuery, state: FSMContext):
     """Finish skill selection."""
+    logger.error(f"🟢 VACANCY SKILLS DONE - START")
     await callback.answer()
 
-    await callback.message.edit_text("✅ Требуемые навыки указаны")
+    # Удаляем кнопки выбора навыков
+    logger.error(f"🟢 Editing message to remove keyboard")
+    await callback.message.edit_text("✅ Требуемые навыки указаны", reply_markup=None)
 
+    logger.error(f"🟢 Sending employment contract question")
     await callback.message.answer(
         "<b>Предусмотрен ли трудовой договор?</b>",
         reply_markup=get_yes_no_keyboard()
     )
     await state.set_state(VacancyCreationStates.has_employment_contract)
+    logger.error(f"🟢 VACANCY SKILLS DONE - COMPLETED")
+
+
+@router.callback_query(VacancyCreationStates.required_skills, F.data == "skill:custom")
+async def process_custom_skills_button(callback: CallbackQuery, state: FSMContext):
+    """Handle custom skills button."""
+    await callback.answer()
+    # Remove keyboard
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    from bot.keyboards.common import get_skip_button
+    skip_msg = await callback.message.answer(
+        "Введите дополнительные навыки через запятую:",
+        reply_markup=get_skip_button()
+    )
+    await state.update_data(custom_skills_skip_message_id=skip_msg.message_id)
+    await state.set_state(VacancyCreationStates.custom_skills)
+
+
+@router.callback_query(VacancyCreationStates.required_skills, F.data.startswith("skill:t:"))
+async def process_skill_toggle(callback: CallbackQuery, state: FSMContext):
+    """Toggle skill selection."""
+    await callback.answer()
+
+    data = await state.get_data()
+    category = data.get("position_category")
+    skills = data.get("required_skills", [])
+
+    # Format: skill:t:{idx}
+    parts = callback.data.split(":")
+    idx = int(parts[2])
+
+    from shared.constants import get_skills_for_position
+    all_skills = get_skills_for_position(category)
+
+    if 0 <= idx < len(all_skills):
+        skill = all_skills[idx]
+        if skill in skills:
+            skills.remove(skill)
+        else:
+            skills.append(skill)
+
+    await state.update_data(required_skills=skills)
+
+    # Update keyboard
+    await callback.message.edit_reply_markup(
+        reply_markup=get_skills_keyboard(category, skills)
+    )
+
+
+@router.message(VacancyCreationStates.custom_skills)
+@router.callback_query(VacancyCreationStates.custom_skills, F.data == "skip")
+async def process_custom_skills(message_or_callback, state: FSMContext):
+    """Process custom skills input."""
+    custom_skills = []
+
+    if isinstance(message_or_callback, CallbackQuery):
+        await message_or_callback.answer()
+        message = message_or_callback.message
+        # Remove skip button
+        try:
+            await message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+    else:
+        message = message_or_callback
+
+        # Remove skip button from previous message
+        data = await state.get_data()
+        skip_message_id = data.get("custom_skills_skip_message_id")
+        if skip_message_id:
+            try:
+                await message.bot.edit_message_reply_markup(
+                    chat_id=message.chat.id,
+                    message_id=skip_message_id,
+                    reply_markup=None
+                )
+            except Exception:
+                pass
+
+        # Parse comma-separated skills
+        custom_skills = [s.strip() for s in message.text.split(",") if s.strip()]
+
+    if custom_skills:
+        data = await state.get_data()
+        skills = data.get("required_skills", [])
+        skills.extend(custom_skills)
+        await state.update_data(required_skills=skills)
+
+        await message.answer(
+            f"✅ Добавлено навыков: {len(custom_skills)}\n"
+            f"Всего: {len(skills)}"
+        )
+
+    # Return to skills selection
+    data = await state.get_data()
+    category = data.get("position_category")
+    skills = data.get("required_skills", [])
+
+    await message.answer(
+        "<b>Выберите дополнительные навыки:</b>\n"
+        "(или нажмите 'Готово')",
+        reply_markup=get_skills_keyboard(category, skills)
+    )
+    await state.set_state(VacancyCreationStates.required_skills)
 
 
 def get_yes_no_keyboard():
@@ -382,7 +474,8 @@ async def process_employment_contract(callback: CallbackQuery, state: FSMContext
     answer = callback.data.split(":")[1] == "yes"
     await state.update_data(has_employment_contract=answer)
 
-    await callback.message.edit_text("✅ Информация о трудовом договоре сохранена")
+    # Удаляем кнопки Да/Нет
+    await callback.message.edit_text("✅ Информация о трудовом договоре сохранена", reply_markup=None)
 
     await callback.message.answer(
         "<b>Есть ли испытательный срок?</b>",
@@ -398,6 +491,12 @@ async def process_probation_period(callback: CallbackQuery, state: FSMContext):
 
     answer = callback.data.split(":")[1] == "yes"
     await state.update_data(has_probation_period=answer)
+
+    # Удаляем кнопки Да/Нет
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     if answer:
         await callback.message.edit_text("✅ Испытательный срок есть")

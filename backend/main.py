@@ -12,6 +12,7 @@ from config.settings import settings
 from backend.database import mongodb
 from backend.api.routes import health, users, resumes, vacancies, responses, analytics, recommendations, auth, favorites, chats
 from backend.services.notification_service import notification_service
+from backend.services.expiration_service import expiration_service
 
 
 # Configure logging
@@ -46,12 +47,27 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize notification service: {e}")
 
+    # Start expiration service
+    try:
+        expiration_service.start()
+        logger.success("Expiration service started")
+    except Exception as e:
+        logger.error(f"Failed to start expiration service: {e}")
+
     logger.success("Application startup complete")
 
     yield
 
     # Shutdown
     logger.info("Shutting down CLICK application...")
+
+    # Stop expiration service
+    try:
+        await expiration_service.stop()
+        logger.info("Expiration service stopped")
+    except Exception as e:
+        logger.error(f"Error stopping expiration service: {e}")
+
     await mongodb.disconnect()
 
     # Close bot session

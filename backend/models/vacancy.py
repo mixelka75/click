@@ -51,14 +51,8 @@ class Vacancy(Document):
 
     # Work location
     city: str
-    address: str
+    address: Optional[str] = None
     nearest_metro: Optional[str] = None
-
-    # Contact person
-    contact_person_name: Optional[str] = None
-    contact_person_position: Optional[str] = None
-    contact_email: Optional[EmailStr] = None
-    contact_phone: Optional[str] = None
 
     # Benefits
     benefits: List[str] = Field(default_factory=list)
@@ -68,7 +62,7 @@ class Vacancy(Document):
 
     # Job description
     description: Optional[str] = None
-    responsibilities: Optional[str] = None
+    responsibilities: List[str] = Field(default_factory=list)
 
     # Privacy
     is_anonymous: bool = Field(default=False)  # Анонимная вакансия
@@ -99,8 +93,13 @@ class Vacancy(Document):
             "position_category",
             "city",
             "status",
+            "is_published",
             "created_at",
+            "published_at",
             "expires_at",
+            [("is_published", 1), ("status", 1)],  # Composite index for filtering active vacancies
+            [("position_category", 1), ("is_published", 1)],  # For category-based recommendations
+            [("city", 1), ("is_published", 1)],  # For location-based filtering
         ]
 
     class Config:

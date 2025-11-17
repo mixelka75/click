@@ -118,6 +118,26 @@ async def main():
     dp.message.middleware(DebugMiddleware())
     dp.message.middleware(StateResetMiddleware())
 
+    # Add callback debug middleware
+    from aiogram.types import CallbackQuery
+
+    class CallbackDebugMiddleware(BaseMiddleware):
+        async def __call__(
+            self,
+            handler: Callable,
+            event: CallbackQuery,
+            data: Dict[str, Any]
+        ) -> Any:
+            from aiogram.fsm.context import FSMContext
+            state: FSMContext = data.get("state")
+            current_state = await state.get_state() if state else None
+            logger.error(f"🔴 CALLBACK: data='{event.data}', state={current_state}, handler={handler}")
+            result = await handler(event, data)
+            logger.error(f"🔴 CALLBACK RESULT: {result}")
+            return result
+
+    dp.callback_query.middleware(CallbackDebugMiddleware())
+
     # Register startup/shutdown handlers
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)

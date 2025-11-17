@@ -33,6 +33,14 @@ async def process_position_category(callback: CallbackQuery, state: FSMContext):
     category = callback.data.split(":")[1]
     await state.update_data(position_category=category)
 
+    # If OTHER category selected, go directly to custom position input
+    if category == "other":
+        await callback.message.edit_text(
+            "<b>Введите название должности:</b>"
+        )
+        await state.set_state(VacancyCreationStates.position_custom)
+        return
+
     await callback.message.edit_text(
         f"<b>Выберите конкретную должность:</b>",
         reply_markup=get_positions_keyboard(category)
@@ -46,6 +54,15 @@ async def process_position(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
     position = callback.data.split(":", 1)[1]
+
+    # Handle custom position input
+    if position == "custom":
+        await callback.message.edit_text(
+            "<b>Введите название должности:</b>"
+        )
+        await state.set_state(VacancyCreationStates.position_custom)
+        return
+
     await state.update_data(position=position)
 
     data = await state.get_data()
@@ -69,12 +86,56 @@ async def process_position(callback: CallbackQuery, state: FSMContext):
         await state.set_state(VacancyCreationStates.company_name)
 
 
+@router.message(VacancyCreationStates.position_custom)
+async def process_custom_position(message: Message, state: FSMContext):
+    """Process custom position input."""
+    position = message.text.strip()
+
+    if len(position) < 2:
+        await message.answer(
+            "❌ Название должности слишком короткое.\n"
+            "Пожалуйста, введите корректное название:"
+        )
+        return
+
+    await state.update_data(position=position)
+
+    data = await state.get_data()
+    category = data.get("position_category")
+
+    # For cooks, ask about cuisines
+    if category == "cook":
+        await message.answer(
+            f"✅ Должность: <b>{position}</b>\n\n"
+            "<b>Выберите типы кухонь, с которыми должен работать повар:</b>\n"
+            "(можно выбрать несколько)",
+            reply_markup=get_cuisines_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.cuisines)
+    else:
+        # Skip to company name
+        await message.answer(
+            f"✅ Должность: <b>{position}</b>\n\n"
+            "Отлично! Теперь расскажите о компании.\n\n"
+            "<b>Введите название вашей компании:</b>"
+        )
+        await state.set_state(VacancyCreationStates.company_name)
+
+
 @router.callback_query(VacancyCreationStates.cuisines, F.data.startswith("cuisine:"))
 async def process_cuisine_toggle(callback: CallbackQuery, state: FSMContext):
     """Toggle cuisine selection."""
     await callback.answer()
 
-    cuisine = callback.data.split(":", 1)[1]
+    # Get cuisine by index
+    from shared.constants import get_cuisine_by_index
+    idx = int(callback.data.split(":", 1)[1])
+    cuisine = get_cuisine_by_index(idx)
+
+    if not cuisine:
+        await callback.answer("Ошибка выбора кухни", show_alert=True)
+        return
+
     data = await state.get_data()
     cuisines = data.get("cuisines", [])
 
@@ -103,11 +164,13 @@ async def process_cuisines_done(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Выберите хотя бы один тип кухни", show_alert=True)
         return
 
+    # Удаляем кнопки выбора кухонь
     cuisines_text = ", ".join(cuisines)
     await callback.message.edit_text(
         f"✅ Типы кухонь: <b>{cuisines_text}</b>\n\n"
         "Теперь расскажите о компании.\n\n"
-        "<b>Введите название вашей компании:</b>"
+        "<b>Введите название вашей компании:</b>",
+        reply_markup=None
     )
     await state.set_state(VacancyCreationStates.company_name)
 
@@ -309,13 +372,14 @@ async def process_address(message: Message, state: FSMContext):
         await state.set_state(VacancyCreationStates.nearest_metro)
     else:
         await state.update_data(nearest_metro=None)
-        # Skip to contact person
+        # Skip to salary (removed contact person collection)
         await message.answer(
             "✅ Адрес сохранён\n\n"
-            "Теперь укажите контактное лицо.\n\n"
-            "<b>Как зовут контактное лицо для связи?</b>"
+            "Отлично! Базовая информация о вакансии готова.\n"
+            "Теперь перейдем к условиям работы и требованиям."
         )
-        await state.set_state(VacancyCreationStates.contact_person_name)
+        from bot.handlers.employer.vacancy_completion import ask_salary_min
+        await ask_salary_min(message, state)
 
 
 @router.message(VacancyCreationStates.nearest_metro)
@@ -330,98 +394,6 @@ async def process_nearest_metro(message: Message, state: FSMContext):
 
     await message.answer(
         "✅ Метро указано\n\n"
-        "Теперь укажите контактное лицо.\n\n"
-        "<b>Как зовут контактное лицо для связи?</b>"
-    )
-    await state.set_state(VacancyCreationStates.contact_person_name)
-
-
-@router.message(VacancyCreationStates.contact_person_name)
-async def process_contact_person_name(message: Message, state: FSMContext):
-    """Process contact person name."""
-    name = message.text.strip()
-
-    if len(name) < 2:
-        await message.answer(
-            "❌ Имя слишком короткое.\n"
-            "Пожалуйста, введите имя контактного лица:"
-        )
-        return
-
-    await state.update_data(contact_person_name=name)
-
-    await message.answer(
-        f"✅ Контактное лицо: <b>{name}</b>\n\n"
-        "<b>Какая у него/неё должность?</b>"
-    )
-    await state.set_state(VacancyCreationStates.contact_person_position)
-
-
-@router.message(VacancyCreationStates.contact_person_position)
-async def process_contact_person_position(message: Message, state: FSMContext):
-    """Process contact person position."""
-    position = message.text.strip()
-
-    if len(position) < 2:
-        await message.answer(
-            "❌ Должность слишком короткая.\n"
-            "Пожалуйста, введите должность:"
-        )
-        return
-
-    await state.update_data(contact_person_position=position)
-
-    await message.answer(
-        "✅ Должность сохранена\n\n"
-        "<b>Введите email для связи:</b>\n"
-        "(или '-' если нет)"
-    )
-    await state.set_state(VacancyCreationStates.contact_email)
-
-
-@router.message(VacancyCreationStates.contact_email)
-async def process_contact_email(message: Message, state: FSMContext):
-    """Process contact email."""
-    email = message.text.strip()
-
-    if email != '-':
-        # Basic email validation
-        if '@' not in email or '.' not in email:
-            await message.answer(
-                "❌ Некорректный email.\n"
-                "Пожалуйста, введите правильный email или '-':"
-            )
-            return
-        await state.update_data(contact_email=email)
-    else:
-        await state.update_data(contact_email=None)
-
-    await message.answer(
-        "✅ Email сохранён\n\n"
-        "<b>Введите телефон для связи:</b>\n"
-        "(в формате +7XXXXXXXXXX)"
-    )
-    await state.set_state(VacancyCreationStates.contact_phone)
-
-
-@router.message(VacancyCreationStates.contact_phone)
-async def process_contact_phone(message: Message, state: FSMContext):
-    """Process contact phone."""
-    phone = message.text.strip()
-
-    # Basic phone validation
-    phone_digits = ''.join(filter(str.isdigit, phone))
-    if len(phone_digits) < 10:
-        await message.answer(
-            "❌ Некорректный номер телефона.\n"
-            "Пожалуйста, введите номер в формате +7XXXXXXXXXX:"
-        )
-        return
-
-    await state.update_data(contact_phone=phone)
-
-    await message.answer(
-        "✅ Контактная информация сохранена\n\n"
         "Отлично! Базовая информация о вакансии готова.\n"
         "Теперь перейдем к условиям работы и требованиям."
     )

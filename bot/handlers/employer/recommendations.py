@@ -129,7 +129,8 @@ async def show_resume_recommendations(message: Message, vacancy_id: str, state: 
         # Save recommendations to state for navigation
         await state.update_data(
             current_candidate_recs=recommendations,
-            current_candidate_index=0
+            current_candidate_index=0,
+            current_vacancy_id=vacancy_id  # Save vacancy ID for later use
         )
 
         # Show first recommendation
@@ -151,9 +152,9 @@ async def show_candidate_card(message: Message, state: FSMContext, index: int, e
             return
 
         rec = recommendations[index]
-        resume = rec.get("resume")  # This is now a Resume object
-        score = rec.get("score", 0)
-        match_details = rec.get("match_details", {})
+        resume = rec.resume  # ResumeRecommendation object
+        score = rec.score
+        match_details = rec.match_details
 
         # Format candidate card
         text = f"💡 <b>Рекомендация #{index + 1} из {len(recommendations)}</b>\n"
@@ -165,34 +166,34 @@ async def show_candidate_card(message: Message, state: FSMContext, index: int, e
             text += f"👤 {resume.full_name}\n"
 
         if resume.city:
-            match_icon = "✅" if match_details.get("location_match") else "📍"
+            match_icon = "✅" if match_details.location_match else "📍"
             text += f"{match_icon} {resume.city}\n"
 
         if resume.desired_salary:
-            salary_icon = "✅" if match_details.get("salary_compatible") else "💰"
+            salary_icon = "✅" if match_details.salary_compatible else "💰"
             text += f"{salary_icon} Зарплата: {resume.desired_salary:,} руб.\n"
 
         if resume.total_experience_years is not None:
-            exp_icon = "✅" if match_details.get("experience_sufficient") else "📊"
+            exp_icon = "✅" if match_details.experience_sufficient else "📊"
             years = resume.total_experience_years
             text += f"{exp_icon} Опыт: {years} {_get_years_word(years)}\n"
 
         # Match details
         text += f"\n<b>📊 Детали совпадения:</b>\n"
 
-        if match_details.get("position_match"):
+        if match_details.position_match:
             text += "✅ Совпадение по позиции\n"
 
-        matched_skills = match_details.get("skills_matched", [])
+        matched_skills = match_details.skills_matched
         if matched_skills:
             text += f"✅ Навыки ({len(matched_skills)}): {', '.join(matched_skills[:5])}\n"
             if len(matched_skills) > 5:
                 text += f"   ... и еще {len(matched_skills) - 5}\n"
 
-        if match_details.get("location_match"):
+        if match_details.location_match:
             text += "✅ Совпадение по городу\n"
 
-        if match_details.get("salary_compatible"):
+        if match_details.salary_compatible:
             text += "✅ Подходящая зарплата\n"
 
         if resume.about:
@@ -373,17 +374,27 @@ async def invite_candidate_from_recommendation(callback: CallbackQuery, state: F
             await callback.message.answer("Пользователь не найден. Используйте /start для регистрации.")
             return
 
-        # Get user's vacancies
+        # Get vacancy from state (the one used for recommendations)
         from backend.models import Response
-        vacancies = await Vacancy.find({"user.$id": user.id}).to_list()
-        published_vacancies = [v for v in vacancies if v.is_published]
+        data = await state.get_data()
+        vacancy_id = data.get("current_vacancy_id")
 
-        if not published_vacancies:
-            await callback.message.answer("У вас нет опубликованных вакансий.")
-            return
+        if not vacancy_id:
+            # Fallback: use first published vacancy
+            vacancies = await Vacancy.find({"user.$id": user.id}).to_list()
+            published_vacancies = [v for v in vacancies if v.is_published]
 
-        # Use first published vacancy
-        vacancy = published_vacancies[0]
+            if not published_vacancies:
+                await callback.message.answer("У вас нет опубликованных вакансий.")
+                return
+
+            vacancy = published_vacancies[0]
+        else:
+            # Use the vacancy from recommendations
+            vacancy = await Vacancy.get(PydanticObjectId(vacancy_id))
+            if not vacancy:
+                await callback.message.answer("Вакансия не найдена.")
+                return
 
         # Get resume
         resume = await Resume.get(PydanticObjectId(resume_id), fetch_links=True)

@@ -3,23 +3,75 @@ Resume management handlers for applicants.
 Includes resume listing, viewing, editing, statistics and archiving.
 """
 
-from datetime import datetime
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 import httpx
+from datetime import datetime, timezone  # заменено для UTC-aware
 
 from backend.models import User, Resume
-from shared.constants import UserRole, ResumeStatus
+from shared.constants import UserRole  # удалён ResumeStatus как неиспользуемый
 from config.settings import settings
-from bot.utils.formatters import format_salary_range, format_date
+from bot.utils.formatters import format_date  # удалён format_salary_range
 from bot.states.resume_states import ResumeCreationStates, ResumeEditStates
 from bot.keyboards.common import get_cancel_keyboard
+from bot.utils.auth import get_user_token
+from backend.api.dependencies import create_access_token
 
 
 router = Router()
+
+async def build_auth_headers(telegram_id: int, state: FSMContext | None) -> dict:
+    """Получить заголовок авторизации. Если state пустой — локально сгенерировать JWT и сохранить в state."""
+    token = None
+    if state is not None:
+        try:
+            token = await get_user_token(state)
+        except Exception as e:
+            logger.warning(f"Cannot get token from state: {e}")
+    if not token:
+        try:
+            user = await User.find_one(User.telegram_id == telegram_id)
+            if user and user.is_active:
+                payload = {
+                    "user_id": str(user.id),
+                    "telegram_id": user.telegram_id,
+                    "role": user.role.value if hasattr(user.role, 'value') else str(user.role),
+                }
+                token = create_access_token(payload)
+                if state is not None:
+                    # Сохраняем вновь созданный токен в FSM, чтобы последующие запросы использовали его
+                    data = await state.get_data()
+                    data.update({"token": token, "user_id": str(user.id), "role": payload["role"], "telegram_id": telegram_id})
+                    await state.set_data(data)
+                    logger.info(f"Fallback token generated and stored for telegram_id={telegram_id}")
+            else:
+                logger.warning(f"User not found or inactive for fallback token: {telegram_id}")
+        except Exception as e:
+            logger.error(f"Failed to build fallback token: {e}")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+# Helper: безопасное обновление сообщения (текст или подпись фото)
+async def edit_message_content(callback: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup | None = None):
+    """Редактировать текст обычного сообщения или подпись фото. Если фото, меняем caption."""
+    msg = callback.message
+    if getattr(msg, 'photo', None):
+        try:
+            await msg.edit_caption(caption=text, reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Failed to edit caption: {e}")
+            # Fallback: отправим новое сообщение
+            await msg.answer(text, reply_markup=reply_markup)
+    else:
+        try:
+            await msg.edit_text(text, reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Failed to edit text: {e}")
+            # Fallback: отправим новое сообщение
+            await msg.answer(text, reply_markup=reply_markup)
 
 
 # ============ START RESUME CREATION ============
@@ -356,7 +408,12 @@ async def return_to_resume_list(callback: CallbackQuery, state: FSMContext):
                 )
             )
 
-        await callback.message.edit_text(text, reply_markup=builder.as_markup())
+        # Заменена логика: если текущее сообщение было фото, удаляем и отправляем новый текст.
+        if getattr(callback.message, 'photo', None):
+            await callback.message.delete()
+            await callback.message.answer(text, reply_markup=builder.as_markup())
+        else:
+            await callback.message.edit_text(text, reply_markup=builder.as_markup())
 
     except Exception as e:
         logger.error(f"Error returning to resume list: {e}")
@@ -364,7 +421,7 @@ async def return_to_resume_list(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("resume:archive:"))
-async def archive_resume(callback: CallbackQuery):
+async def archive_resume(callback: CallbackQuery, state: FSMContext):  # добавлен state
     """Archive a resume with confirmation."""
     resume_id = callback.data.split(":")[-1]
 
@@ -377,8 +434,9 @@ async def archive_resume(callback: CallbackQuery):
         InlineKeyboardButton(text="❌ Отмена", callback_data=f"resume:view:{resume_id}")
     )
 
-    await callback.message.edit_text(
-        "🗄️ <b>Архивирование резюме</b>\n\n"
+    await edit_message_content(
+        callback,
+        "📄 <b>Архивирование резюме</b>\n\n"
         "Вы уверены, что хотите архивировать это резюме?\n\n"
         "⚠️ Архивированное резюме будет скрыто из поиска, но вы сможете его восстановить позже.",
         reply_markup=builder.as_markup()
@@ -387,7 +445,7 @@ async def archive_resume(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("resume:archive_confirm:"))
-async def confirm_archive_resume(callback: CallbackQuery):
+async def confirm_archive_resume(callback: CallbackQuery, state: FSMContext):  # добавлен state
     """Confirm and archive resume."""
     await callback.answer("🗄️ Архивирую резюме...")
 
@@ -396,8 +454,13 @@ async def confirm_archive_resume(callback: CallbackQuery):
     try:
         # Call backend API to archive resume
         async with httpx.AsyncClient() as client:
+            headers = await build_auth_headers(callback.from_user.id, state)
+            if not headers:
+                await callback.message.answer("❌ Нет авторизации. Используйте /start")
+                return
             response = await client.patch(
-                f"{settings.api_url}/resumes/{resume_id}/archive"
+                f"{settings.api_url}/resumes/{resume_id}/archive",
+                headers=headers
             )
 
             if response.status_code == 200:
@@ -406,7 +469,8 @@ async def confirm_archive_resume(callback: CallbackQuery):
                 text = format_resume_details(resume)
                 status = resume.status.value if hasattr(resume.status, 'value') else str(resume.status)
 
-                await callback.message.edit_text(
+                await edit_message_content(
+                    callback,
                     text,
                     reply_markup=get_resume_management_keyboard(resume_id, status)
                 )
@@ -420,7 +484,7 @@ async def confirm_archive_resume(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("resume:restore:"))
-async def restore_resume(callback: CallbackQuery):
+async def restore_resume(callback: CallbackQuery, state: FSMContext):  # добавлен state
     """Restore an archived resume."""
     await callback.answer("♻️ Восстанавливаю резюме...")
 
@@ -429,8 +493,13 @@ async def restore_resume(callback: CallbackQuery):
     try:
         # Call backend API to restore resume (publish it again)
         async with httpx.AsyncClient() as client:
+            headers = await build_auth_headers(callback.from_user.id, state)
+            if not headers:
+                await callback.message.answer("❌ Нет авторизации. Используйте /start")
+                return
             response = await client.patch(
-                f"{settings.api_url}/resumes/{resume_id}/publish"
+                f"{settings.api_url}/resumes/{resume_id}/publish",
+                headers=headers
             )
 
             if response.status_code == 200:
@@ -439,7 +508,8 @@ async def restore_resume(callback: CallbackQuery):
                 text = format_resume_details(resume)
                 status = resume.status.value if hasattr(resume.status, 'value') else str(resume.status)
 
-                await callback.message.edit_text(
+                await edit_message_content(
+                    callback,
                     text,
                     reply_markup=get_resume_management_keyboard(resume_id, status)
                 )
@@ -521,8 +591,13 @@ async def start_resume_edit(callback: CallbackQuery, state: FSMContext):
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = await build_auth_headers(callback.from_user.id, state)
+            if not headers:
+                await callback.message.answer("❌ Нет авторизации. Используйте /start")
+                return
             response = await client.get(
-                f"{settings.api_url}/resumes/{resume_id}"
+                f"{settings.api_url}/resumes/{resume_id}",
+                headers=headers
             )
 
             if response.status_code != 200:
@@ -565,7 +640,7 @@ async def start_resume_edit(callback: CallbackQuery, state: FSMContext):
                 InlineKeyboardButton(text="🔙 Отмена", callback_data=f"resume:view:{resume_id}")
             )
 
-            await callback.message.edit_text(text, reply_markup=builder.as_markup())
+            await edit_message_content(callback, text, reply_markup=builder.as_markup())
             await state.set_state(ResumeEditStates.select_field)
 
     except Exception as e:
@@ -598,7 +673,7 @@ async def select_resume_field(callback: CallbackQuery, state: FSMContext):
 
     prompt = prompts.get(field, "Введите новое значение:")
 
-    await callback.message.edit_text(prompt)
+    await edit_message_content(callback, prompt)
     await state.set_state(ResumeEditStates.edit_value)
 
 
@@ -621,9 +696,14 @@ async def process_resume_photo_edit(message: Message, state: FSMContext):
     try:
         # Update via API
         async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = await build_auth_headers(message.from_user.id, state)
+            if not headers:
+                await message.answer("❌ Нет авторизации. Используйте /start")
+                return
             response = await client.patch(
                 f"{settings.api_url}/resumes/{resume_id}",
-                json=update_data
+                json=update_data,
+                headers=headers
             )
 
             if response.status_code == 200:
@@ -703,9 +783,14 @@ async def process_resume_field_edit(message: Message, state: FSMContext):
 
         # Update via API
         async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = await build_auth_headers(message.from_user.id, state)
+            if not headers:
+                await message.answer("❌ Нет авторизации. Используйте /start")
+                return
             response = await client.patch(
                 f"{settings.api_url}/resumes/{resume_id}",
-                json=update_data
+                json=update_data,
+                headers=headers
             )
 
             if response.status_code == 200:
@@ -728,45 +813,33 @@ async def process_resume_field_edit(message: Message, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("resume:stats:"))
-async def show_resume_statistics(callback: CallbackQuery):
-    """Show detailed resume statistics."""
+async def show_resume_statistics(callback: CallbackQuery, state: FSMContext):
+    """Показать подробную статистику резюме."""
     await callback.answer()
-
     resume_id = callback.data.split(":")[-1]
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Get resume
-            resume_response = await client.get(
-                f"{settings.api_url}/resumes/{resume_id}"
-            )
+            headers = await build_auth_headers(callback.from_user.id, state)
+            if not headers:
+                await callback.message.answer("❌ Нет авторизации. Используйте /start")
+                return
 
+            resume_response = await client.get(f"{settings.api_url}/resumes/{resume_id}", headers=headers)
             if resume_response.status_code != 200:
                 await callback.message.answer("❌ Резюме не найдено")
                 return
-
             resume = resume_response.json()
 
-            # Get analytics
-            analytics_response = await client.get(
-                f"{settings.api_url}/analytics/resume/{resume_id}"
-            )
+            analytics_response = await client.get(f"{settings.api_url}/analytics/resume/{resume_id}", headers=headers)
+            analytics = analytics_response.json() if analytics_response.status_code == 200 else {}
 
-            if analytics_response.status_code == 200:
-                analytics = analytics_response.json()
-            else:
-                analytics = {}
+        text = format_resume_statistics(resume, analytics)
 
-            # Format statistics
-            text = format_resume_statistics(resume, analytics)
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(text="🔙 Назад к резюме", callback_data=f"resume:view:{resume_id}"))
 
-            # Add back button
-            builder = InlineKeyboardBuilder()
-            builder.row(
-                InlineKeyboardButton(text="🔙 Назад к резюме", callback_data=f"resume:view:{resume_id}")
-            )
-
-            await callback.message.edit_text(text, reply_markup=builder.as_markup())
+        await edit_message_content(callback, text, reply_markup=builder.as_markup())
 
     except httpx.TimeoutException:
         await callback.message.answer("⏱ Превышено время ожидания. Попробуйте позже.")
@@ -775,65 +848,75 @@ async def show_resume_statistics(callback: CallbackQuery):
         await callback.message.answer("❌ Ошибка при загрузке статистики")
 
 
+# Добавлена реализация функции
 def format_resume_statistics(resume: dict, analytics: dict) -> str:
-    """Format detailed resume statistics."""
-    text = [
-        "📊 <b>СТАТИСТИКА РЕЗЮМЕ</b>\n",
-        f"💼 <b>{resume.get('desired_position', 'Не указано')}</b>",
-        f"👤 {resume.get('full_name', 'Не указано')}\n"
-    ]
+    """Сформировать текст подробной статистики резюме."""
+    views = analytics.get("views_count", resume.get("views_count", 0))
+    responses_count = analytics.get("responses_count", resume.get("responses_count", 0))
+    applications = analytics.get("applications_count", 0)
+    invitations = analytics.get("invitations_count", 0)
+    invitation_rate = analytics.get("invitation_rate", 0)
+    success_rate = analytics.get("success_rate", 0)
+    days_active = analytics.get("days_active")
 
-    # Basic stats
-    views = analytics.get('views_count', resume.get('views_count', 0))
-    responses = analytics.get('responses_count', resume.get('responses_count', 0))
+    responses_by_status = analytics.get("responses_by_status", {})
 
-    text.append("<b>📈 ОСНОВНЫЕ ПОКАЗАТЕЛИ</b>")
-    text.append(f"👁 Просмотры: {views}")
-    text.append(f"📬 Приглашения: {responses}")
+    lines = []
+    lines.append("📊 <b>СТАТИСТИКА РЕЗЮМЕ</b>")
+    lines.append(f"💼 Должность: <b>{resume.get('desired_position', 'Не указано')}</b>")
+    lines.append(f"👤 ФИО: {resume.get('full_name', 'Не указано')}")
+    if days_active is not None:
+        lines.append(f"📅 Активно дней: {days_active}")
 
-    # Conversion rate
+    lines.append("\n📈 <b>ОСНОВНЫЕ ПОКАЗАТЕЛИ</b>")
+    lines.append(f"👁 Просмотры: {views}")
+    lines.append(f"📬 Отклики (всего): {responses_count}")
+    lines.append(f"📝 Заявки: {applications}")
+    lines.append(f"✅ Приглашения: {invitations}")
     if views > 0:
-        conversion = (responses / views) * 100
-        text.append(f"📊 Конверсия: {conversion:.1f}%")
+        conv = (responses_count / views) * 100 if views else 0
+        lines.append(f"📊 Конверсия просмотров в отклики: {conv:.1f}%")
+    lines.append(f"🎯 Приглашения / просмотры: {invitation_rate:.1f}%")
+    lines.append(f"🏆 Успешность (accepted/total): {success_rate:.1f}%")
 
-    text.append("")
+    if responses_by_status:
+        lines.append("\n📬 <b>Статусы откликов</b>")
+        status_emoji = {
+            "pending": "⏳",
+            "viewed": "👀",
+            "invited": "✅",
+            "accepted": "🎉",
+            "rejected": "❌"
+        }
+        for status, count in responses_by_status.items():
+            emoji = status_emoji.get(status, "📝")
+            lines.append(f"{emoji} {status}: {count}")
 
-    # Response breakdown
-    if analytics.get('response_breakdown'):
-        text.append("<b>📬 СТАТУС ПРИГЛАШЕНИЙ</b>")
-        breakdown = analytics['response_breakdown']
-        for status, count in breakdown.items():
-            status_emoji = {
-                "pending": "⏳",
-                "viewed": "👀",
-                "invited": "✅",
-                "accepted": "🎉",
-                "rejected": "❌"
-            }.get(status, "📝")
-            text.append(f"{status_emoji} {status}: {count}")
-        text.append("")
+    # Период публикации
+    pub = resume.get("published_at")
+    if pub:
+        try:
+            if isinstance(pub, str):
+                pub_dt = datetime.fromisoformat(pub.replace('Z', '+00:00'))
+            else:
+                pub_dt = pub
+            days = (datetime.utcnow() - pub_dt.replace(tzinfo=None)).days
+            lines.append(f"\n🗓 Опубликовано: {days} дн. назад")
+        except Exception:
+            pass
 
-    # Time metrics
-    if resume.get('published_at'):
-        from datetime import datetime
-        pub_date = resume.get('published_at')
-        if isinstance(pub_date, str):
-            pub_date = datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
-        days_active = (datetime.utcnow() - pub_date.replace(tzinfo=None)).days
-        text.append(f"📅 Опубликовано: {days_active} дней назад")
-
-    # Performance insights
-    text.append("\n<b>💡 РЕКОМЕНДАЦИИ</b>")
+    # Рекомендации
+    lines.append("\n💡 <b>РЕКОМЕНДАЦИИ</b>")
     if views < 10:
-        text.append("• Обновите навыки для лучшей видимости")
-        text.append("• Добавьте больше деталей об опыте")
-    elif views >= 10 and responses == 0:
-        text.append("• Уточните желаемую должность")
-        text.append("• Проверьте контактные данные")
-    elif conversion < 5:
-        text.append("• Улучшите описание навыков")
-        text.append("• Добавьте портфолио или сертификаты")
+        lines.append("• Добавьте больше навыков и опыта")
+        lines.append("• Проверьте корректность должности")
+    elif views >= 10 and responses_count == 0:
+        lines.append("• Уточните должность и специализацию")
+        lines.append("• Проверьте контакты")
+    elif views >= 20 and success_rate < 5:
+        lines.append("• Улучшите описание навыков")
+        lines.append("• Добавьте курсы, сертификаты")
     else:
-        text.append("✅ Резюме работает хорошо!")
+        lines.append("✅ Резюме показывает хорошие показатели")
 
-    return "\n".join(text)
+    return "\n".join(lines)

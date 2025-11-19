@@ -54,7 +54,7 @@ async def build_auth_headers(telegram_id: int, state: FSMContext | None) -> dict
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-# Helper: безопасное о��новление сообщения (текст или подпись фото)
+# Helper: безопасное обновление сообщения (текст или подпись фото)
 async def edit_message_content(callback: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup | None = None):
     """Редактировать текст обычного сообщения или подпись фото. Если фото, меняем caption."""
     msg = callback.message
@@ -263,7 +263,7 @@ def get_resume_management_keyboard(resume_id: str, status: str) -> InlineKeyboar
         )
     elif status == "archived":
         builder.row(
-            InlineKeyboardButton(text="♻️ Восста��овить", callback_data=f"resume:restore:{resume_id}")
+            InlineKeyboardButton(text="♻️ Восстановить", callback_data=f"resume:restore:{resume_id}")
         )
 
     # Third row: Back
@@ -663,7 +663,7 @@ async def select_resume_field(callback: CallbackQuery, state: FSMContext):
     prompts = {
         "salary": "💰 <b>Желаемая зарплата</b>\n\nВведите желаемую зарплату (только число):\nПример: 50000",
         "city": "📍 <b>Город</b>\n\nВведите город:",
-        "position": "��� <b>Должность</b>\n\nВведите желаемую должность:",
+        "position": "💼 <b>Должность</b>\n\nВведите желаемую должность:",
         "skills": "🎯 <b>Навыки</b>\n\nВведите навыки через запятую:\nПример: Работа с кассой, Знание меню, Сервис",
         "phone": "📞 <b>Телефон</b>\n\nВведите номер телефона:\nПример: +7 900 123-45-67",
         "email": "✉️ <b>Email</b>\n\nВведите email:",
@@ -673,7 +673,14 @@ async def select_resume_field(callback: CallbackQuery, state: FSMContext):
 
     prompt = prompts.get(field, "Введите новое значение:")
 
-    await edit_message_content(callback, prompt)
+    # Добавим кнопку Назад к выбору полей и Отмена к резюме
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="🔙 Назад", callback_data=f"resume:edit:{resume_id}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"resume:view:{resume_id}")
+    )
+
+    await edit_message_content(callback, prompt, reply_markup=kb.as_markup())
     await state.set_state(ResumeEditStates.edit_value)
 
 

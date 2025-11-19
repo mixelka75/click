@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 import httpx
-from datetime import datetime, timezone  # заменено для UTC-aware
+from datetime import datetime, timezone
 
 from backend.models import User, Resume
 from shared.constants import UserRole  # удалён ResumeStatus как неиспользуемый
@@ -54,7 +54,7 @@ async def build_auth_headers(telegram_id: int, state: FSMContext | None) -> dict
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-# Helper: безопасное обновление сообщения (текст или подпись фото)
+# Helper: безопасное о��новление сообщения (текст или подпись фото)
 async def edit_message_content(callback: CallbackQuery, text: str, reply_markup: InlineKeyboardMarkup | None = None):
     """Редактировать текст обычного сообщения или подпись фото. Если фото, меняем caption."""
     msg = callback.message
@@ -263,7 +263,7 @@ def get_resume_management_keyboard(resume_id: str, status: str) -> InlineKeyboar
         )
     elif status == "archived":
         builder.row(
-            InlineKeyboardButton(text="♻️ Восстановить", callback_data=f"resume:restore:{resume_id}")
+            InlineKeyboardButton(text="♻️ Восста��овить", callback_data=f"resume:restore:{resume_id}")
         )
 
     # Third row: Back
@@ -536,7 +536,7 @@ async def my_responses(message: Message):
         from backend.models import Response, Vacancy
 
         responses = await Response.find(
-            Response.applicant.id == user.id
+            Response.applicant == user.id
         ).to_list()
 
         if not responses:
@@ -663,7 +663,7 @@ async def select_resume_field(callback: CallbackQuery, state: FSMContext):
     prompts = {
         "salary": "💰 <b>Желаемая зарплата</b>\n\nВведите желаемую зарплату (только число):\nПример: 50000",
         "city": "📍 <b>Город</b>\n\nВведите город:",
-        "position": "💼 <b>Должность</b>\n\nВведите желаемую должность:",
+        "position": "��� <b>Должность</b>\n\nВведите желаемую должность:",
         "skills": "🎯 <b>Навыки</b>\n\nВведите навыки через запятую:\nПример: Работа с кассой, Знание меню, Сервис",
         "phone": "📞 <b>Телефон</b>\n\nВведите номер телефона:\nПример: +7 900 123-45-67",
         "email": "✉️ <b>Email</b>\n\nВведите email:",
@@ -900,7 +900,11 @@ def format_resume_statistics(resume: dict, analytics: dict) -> str:
                 pub_dt = datetime.fromisoformat(pub.replace('Z', '+00:00'))
             else:
                 pub_dt = pub
-            days = (datetime.utcnow() - pub_dt.replace(tzinfo=None)).days
+            # Приводим к UTC-aware и считаем по датам (без часов), чтобы на следующий день было 1
+            if pub_dt.tzinfo is None:
+                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+            now_utc = datetime.now(timezone.utc)
+            days = (now_utc.date() - pub_dt.astimezone(timezone.utc).date()).days
             lines.append(f"\n🗓 Опубликовано: {days} дн. назад")
         except Exception:
             pass

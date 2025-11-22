@@ -4,9 +4,8 @@ Vacancy creation handlers - Part 1: Position, Company, Location, Contact.
 
 from aiogram import Router, F
 from bot.filters import IsNotMenuButton
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
-from loguru import logger
 
 from bot.states.vacancy_states import VacancyCreationStates
 from bot.keyboards.positions import (
@@ -14,15 +13,18 @@ from bot.keyboards.positions import (
     get_positions_keyboard,
     get_cuisines_keyboard
 )
-from bot.keyboards.common import get_yes_no_keyboard, get_cancel_keyboard
-from backend.models import User
-from shared.constants import UserRole, POSITION_CATEGORIES
-
 
 router = Router()
 # Apply filter to ALL handlers in this router - don't process menu buttons
 # Note: Start handler moved to vacancy_handlers.py where menu button handlers belong
 router.message.filter(IsNotMenuButton())
+
+
+def get_back_to_categories_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard with back to categories button."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад к категориям", callback_data="back_to_categories")]
+    ])
 
 
 @router.callback_query(VacancyCreationStates.position_category, F.data.startswith("position_cat:"))
@@ -36,7 +38,8 @@ async def process_position_category(callback: CallbackQuery, state: FSMContext):
     # If OTHER category selected, go directly to custom position input
     if category == "other":
         await callback.message.edit_text(
-            "<b>Введите название должности:</b>"
+            "<b>Введите название должности:</b>",
+            reply_markup=get_back_to_categories_keyboard()
         )
         await state.set_state(VacancyCreationStates.position_custom)
         return
@@ -58,7 +61,8 @@ async def process_position(callback: CallbackQuery, state: FSMContext):
     # Handle custom position input
     if position == "custom":
         await callback.message.edit_text(
-            "<b>Введите название должности:</b>"
+            "<b>Введите название должности:</b>",
+            reply_markup=get_back_to_categories_keyboard()
         )
         await state.set_state(VacancyCreationStates.position_custom)
         return
@@ -86,6 +90,21 @@ async def process_position(callback: CallbackQuery, state: FSMContext):
         await state.set_state(VacancyCreationStates.company_name)
 
 
+@router.callback_query(VacancyCreationStates.position_custom, F.data == "back_to_categories")
+async def back_from_custom_to_categories(callback: CallbackQuery, state: FSMContext):
+    """Return to categories from custom position input."""
+    await callback.answer()
+    # Очищаем выбранную позицию если была введена
+    data = await state.get_data()
+    if data.get("position"):
+        await state.update_data(position=None)
+    await callback.message.edit_text(
+        "<b>Выберите категорию должности:</b>",
+        reply_markup=get_position_categories_keyboard()
+    )
+    await state.set_state(VacancyCreationStates.position_category)
+
+
 @router.message(VacancyCreationStates.position_custom)
 async def process_custom_position(message: Message, state: FSMContext):
     """Process custom position input."""
@@ -94,7 +113,8 @@ async def process_custom_position(message: Message, state: FSMContext):
     if len(position) < 2:
         await message.answer(
             "❌ Название должности слишком короткое.\n"
-            "Пожалуйста, введите корректное название:"
+            "Пожалуйста, введите корректное название:",
+            reply_markup=get_back_to_categories_keyboard()
         )
         return
 
@@ -119,6 +139,7 @@ async def process_custom_position(message: Message, state: FSMContext):
             "Отлично! Теперь расскажите о компании.\n\n"
             "<b>Введите название вашей компании:</b>"
         )
+
         await state.set_state(VacancyCreationStates.company_name)
 
 
@@ -401,3 +422,20 @@ async def process_nearest_metro(message: Message, state: FSMContext):
     # Import here to avoid circular imports
     from bot.handlers.employer.vacancy_completion import ask_salary_min
     await ask_salary_min(message, state)
+
+
+@router.callback_query(VacancyCreationStates.position, F.data == "back_to_categories")
+async def back_to_position_categories(callback: CallbackQuery, state: FSMContext):
+    """Return back to position category selection (employer flow)."""
+    await callback.answer()
+    # Показываем снова категории должностей
+    await callback.message.edit_text(
+        "<b>Выберите категорию должности:</b>",
+        reply_markup=get_position_categories_keyboard()
+    )
+    await state.set_state(VacancyCreationStates.position_category)
+
+
+
+
+

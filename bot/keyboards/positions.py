@@ -123,7 +123,7 @@ def get_cuisines_keyboard(selected_cuisines: List[str] = None) -> InlineKeyboard
 
     # Add back button
     builder.row(InlineKeyboardButton(
-        text="◀️ Назад к специализации",
+        text="◀️ Назад к должности",
         callback_data="cuisine:back"
     ))
 

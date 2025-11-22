@@ -170,18 +170,13 @@ async def process_cuisine_toggle(callback: CallbackQuery, state: FSMContext):
 
     # Handle "Back" button
     if callback.data == "cuisine:back":
-        # Удаляем кнопки
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-
-        position = data.get("position", "")
-        await callback.message.answer(
-            f"✅ Должность: <b>{position}</b>\n\n"
-            "<b>Введите название вашей компании:</b>"
+        # Возвращаемся к выбору должности - редактируем существующее сообщение
+        category = data.get("position_category")
+        await callback.message.edit_text(
+            "<b>Выберите конкретную должность:</b>",
+            reply_markup=get_positions_keyboard(category)
         )
-        await state.set_state(VacancyCreationStates.company_name)
+        await state.set_state(VacancyCreationStates.position)
         return
 
     # Handle "Custom cuisine" button

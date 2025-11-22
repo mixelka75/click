@@ -599,20 +599,13 @@ async def process_cuisines(callback: CallbackQuery, state: FSMContext):
 
     # Handle "Back" button
     if callback.data == "cuisine:back":
-        # Удаляем кнопки
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-
-        skip_msg = await callback.message.answer(
-            "<b>Есть ли у выбранной должности специализация?</b>\n"
-            "Например: Банкетный менеджер, Старший официант.\n"
-            "Если специализации нет, нажмите 'Пропустить'.",
-            reply_markup=get_skip_inline_button()
+        # Возвращаемся к выбору должности - редактируем существующее сообщение
+        category = data.get("position_category")
+        await callback.message.edit_text(
+            "<b>Выберите конкретную должность:</b>",
+            reply_markup=get_positions_keyboard(category)
         )
-        await state.update_data(skip_message_id=skip_msg.message_id)
-        await state.set_state(ResumeCreationStates.specialization)
+        await state.set_state(ResumeCreationStates.position)
         return
 
     # Handle "Custom cuisine" button

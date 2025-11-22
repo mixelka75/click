@@ -148,7 +148,58 @@ async def process_cuisine_toggle(callback: CallbackQuery, state: FSMContext):
     """Toggle cuisine selection."""
     await callback.answer()
 
-    # Get cuisine by index
+    data = await state.get_data()
+    cuisines = data.get("cuisines", [])
+
+    # Handle "Done" button
+    if callback.data == "cuisine:done":
+        if not cuisines:
+            await callback.answer("Выберите хотя бы один тип кухни", show_alert=True)
+            return
+
+        # Удаляем кнопки выбора кухонь
+        cuisines_text = ", ".join(cuisines)
+        await callback.message.edit_text(
+            f"✅ Типы кухонь: <b>{cuisines_text}</b>\n\n"
+            "Теперь расскажите о компании.\n\n"
+            "<b>Введите название вашей компании:</b>",
+            reply_markup=None
+        )
+        await state.set_state(VacancyCreationStates.company_name)
+        return
+
+    # Handle "Back" button
+    if callback.data == "cuisine:back":
+        # Удаляем кнопки
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        position = data.get("position", "")
+        await callback.message.answer(
+            f"✅ Должность: <b>{position}</b>\n\n"
+            "<b>Введите название вашей компании:</b>"
+        )
+        await state.set_state(VacancyCreationStates.company_name)
+        return
+
+    # Handle "Custom cuisine" button
+    if callback.data == "cuisine:custom":
+        # Удаляем кнопки
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await callback.message.answer(
+            "<b>Введите название кухни:</b>",
+            reply_markup=get_back_to_categories_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.cuisines_custom)
+        return
+
+    # Toggle cuisine - callback_data format: cuisine:{idx}
     from shared.constants import get_cuisine_by_index
     idx = int(callback.data.split(":", 1)[1])
     cuisine = get_cuisine_by_index(idx)
@@ -156,9 +207,6 @@ async def process_cuisine_toggle(callback: CallbackQuery, state: FSMContext):
     if not cuisine:
         await callback.answer("Ошибка выбора кухни", show_alert=True)
         return
-
-    data = await state.get_data()
-    cuisines = data.get("cuisines", [])
 
     if cuisine in cuisines:
         cuisines.remove(cuisine)
@@ -171,6 +219,37 @@ async def process_cuisine_toggle(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_reply_markup(
         reply_markup=get_cuisines_keyboard(selected_cuisines=cuisines)
     )
+
+
+@router.message(VacancyCreationStates.cuisines_custom)
+async def process_custom_cuisine_vacancy(message: Message, state: FSMContext):
+    """Process custom cuisine input for vacancy."""
+    custom_cuisine = message.text.strip()
+
+    if len(custom_cuisine) < 2:
+        await message.answer(
+            "❌ Название кухни слишком короткое.\n"
+            "Пожалуйста, введите корректное название кухни (минимум 2 символа):",
+            reply_markup=get_back_to_categories_keyboard()
+        )
+        return
+
+    # Добавляем пользовательскую кухню к списку
+    data = await state.get_data()
+    cuisines = data.get("cuisines", [])
+
+    if custom_cuisine not in cuisines:
+        cuisines.append(custom_cuisine)
+        await state.update_data(cuisines=cuisines)
+
+    # Возвращаемся к выбору кухонь
+    await message.answer(
+        f"✅ Добавлено: {custom_cuisine}\n\n"
+        "<b>Выберите типы кухонь, с которыми должен работать повар:</b>\n"
+        "(можно выбрать несколько)",
+        reply_markup=get_cuisines_keyboard(selected_cuisines=cuisines)
+    )
+    await state.set_state(VacancyCreationStates.cuisines)
 
 
 @router.callback_query(VacancyCreationStates.cuisines, F.data == "cuisines_done")

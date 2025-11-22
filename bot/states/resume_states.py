@@ -29,6 +29,7 @@ class ResumeCreationStates(StatesGroup):
     position_custom = State()
     specialization = State()  # For cooks
     cuisines = State()  # For cooks
+    cuisines_custom = State()  # For custom cuisine input
     desired_salary = State()
     salary_type = State()
     work_schedule = State()

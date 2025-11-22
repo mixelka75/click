@@ -578,6 +578,7 @@ async def process_cuisines(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     cuisines = data.get("cuisines", [])
 
+    # Handle "Done" button
     if callback.data == "cuisine:done":
         # Удаляем кнопки выбора кухонь
         try:
@@ -596,6 +597,25 @@ async def process_cuisines(callback: CallbackQuery, state: FSMContext):
         await state.set_state(ResumeCreationStates.desired_salary)
         return
 
+    # Handle "Back" button
+    if callback.data == "cuisine:back":
+        # Удаляем кнопки
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        skip_msg = await callback.message.answer(
+            "<b>Есть ли у выбранной должности специализация?</b>\n"
+            "Например: Банкетный менеджер, Старший официант.\n"
+            "Если специализации нет, нажмите 'Пропустить'.",
+            reply_markup=get_skip_inline_button()
+        )
+        await state.update_data(skip_message_id=skip_msg.message_id)
+        await state.set_state(ResumeCreationStates.specialization)
+        return
+
+    # Handle "Custom cuisine" button
     if callback.data == "cuisine:custom":
         # Удаляем кнопки
         try:
@@ -604,9 +624,10 @@ async def process_cuisines(callback: CallbackQuery, state: FSMContext):
             pass
 
         await callback.message.answer(
-            "Введите название кухни:",
-            reply_markup=get_cancel_keyboard()
+            "<b>Введите название кухни:</b>",
+            reply_markup=get_back_cancel_keyboard()
         )
+        await state.set_state(ResumeCreationStates.cuisines_custom)
         return
 
     # Toggle cuisine - callback_data format: cuisine:{idx}
@@ -630,3 +651,45 @@ async def process_cuisines(callback: CallbackQuery, state: FSMContext):
         reply_markup=get_cuisines_keyboard(cuisines)
     )
 
+
+@router.message(ResumeCreationStates.cuisines_custom)
+async def process_custom_cuisine(message: Message, state: FSMContext):
+    """Process custom cuisine input."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        # Возвращаемся к выбору кухонь
+        data = await state.get_data()
+        cuisines = data.get("cuisines", [])
+        await message.answer(
+            "<b>Выберите типы кухонь, с которыми работаете:</b>\n"
+            "(можно выбрать несколько)",
+            reply_markup=get_cuisines_keyboard(cuisines)
+        )
+        await state.set_state(ResumeCreationStates.cuisines)
+        return
+
+    custom_cuisine = message.text.strip()
+
+    if len(custom_cuisine) < 2:
+        await message.answer("Пожалуйста, введите корректное название кухни (минимум 2 символа).")
+        return
+
+    # Добавляем пользовательскую кухню к списку
+    data = await state.get_data()
+    cuisines = data.get("cuisines", [])
+
+    if custom_cuisine not in cuisines:
+        cuisines.append(custom_cuisine)
+        await state.update_data(cuisines=cuisines)
+
+    # Возвращаемся к выбору кухонь
+    await message.answer(
+        f"✅ Добавлено: {custom_cuisine}\n\n"
+        "<b>Выберите типы кухонь, с которыми работаете:</b>\n"
+        "(можно выбрать несколько)",
+        reply_markup=get_cuisines_keyboard(cuisines)
+    )
+    await state.set_state(ResumeCreationStates.cuisines)

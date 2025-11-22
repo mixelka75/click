@@ -108,12 +108,24 @@ def get_cuisines_keyboard(selected_cuisines: List[str] = None) -> InlineKeyboard
     # Arrange in 2 columns
     builder.adjust(2)
 
+    # Add "Other" option for custom cuisine input
+    builder.row(InlineKeyboardButton(
+        text="✏️ Другое направление",
+        callback_data="cuisine:custom"
+    ))
+
     # Add done button if at least one selected
     if selected_cuisines:
         builder.row(InlineKeyboardButton(
             text="✅ Готово",
-            callback_data="cuisines_done"
+            callback_data="cuisine:done"
         ))
+
+    # Add back button
+    builder.row(InlineKeyboardButton(
+        text="◀️ Назад к специализации",
+        callback_data="cuisine:back"
+    ))
 
     return builder.as_markup()
 

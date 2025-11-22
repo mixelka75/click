@@ -14,6 +14,7 @@ class VacancyCreationStates(StatesGroup):
     position_custom = State()  # For custom position input
     specialization = State()  # For specific roles
     cuisines = State()  # For cooks
+    cuisines_custom = State()  # For custom cuisine input
 
     # Salary
     salary_min = State()

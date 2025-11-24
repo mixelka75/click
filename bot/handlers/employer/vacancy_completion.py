@@ -546,26 +546,96 @@ async def process_remote_work(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text("✅ Информация об удаленной работе сохранена")
 
     await callback.message.answer(
-        "<b>Перечислите бонусы и льготы:</b>\n"
-        "(например: бесплатное питание, скидки, обучение)\n\n"
-        "Каждый бонус с новой строки, или введите '-' если нет"
+        "<b>✨ МЫ ПРЕДЛАГАЕМ</b>\n\n"
+        "Выберите дополнительные преимущества:\n"
+        "(можно выбрать несколько или пропустить)",
+        reply_markup=get_benefits_keyboard()
     )
     await state.set_state(VacancyCreationStates.benefits)
 
 
-@router.message(VacancyCreationStates.benefits)
-async def process_benefits(message: Message, state: FSMContext):
-    """Process benefits."""
-    text = message.text.strip()
+def get_benefits_keyboard(selected_benefits=None):
+    """Get benefits selection keyboard."""
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    from shared.constants.common import BENEFITS
 
-    if text != '-':
-        benefits = [b.strip() for b in text.split('\n') if b.strip()]
-        await state.update_data(benefits=benefits)
-    else:
-        await state.update_data(benefits=[])
+    if selected_benefits is None:
+        selected_benefits = []
 
-    await message.answer(
-        "✅ Бонусы и льготы сохранены\n\n"
+    buttons = []
+    for idx, benefit in enumerate(BENEFITS):
+        prefix = "✅ " if benefit in selected_benefits else ""
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{prefix}{benefit}",
+                callback_data=f"benefit:{idx}"
+            )
+        ])
+
+    # Add Done and Skip buttons
+    buttons.append([
+        InlineKeyboardButton(text="✔️ Готово", callback_data="benefits_done"),
+        InlineKeyboardButton(text="⏭️ Пропустить", callback_data="benefits_skip")
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+@router.callback_query(VacancyCreationStates.benefits, F.data.startswith("benefit:"))
+async def process_benefit_toggle(callback: CallbackQuery, state: FSMContext):
+    """Toggle benefit selection."""
+    await callback.answer()
+
+    data = await state.get_data()
+    benefits = data.get("benefits", [])
+
+    # Get benefit by index
+    idx = int(callback.data.split(":")[1])
+    from shared.constants.common import BENEFITS
+
+    if 0 <= idx < len(BENEFITS):
+        benefit = BENEFITS[idx]
+        if benefit in benefits:
+            benefits.remove(benefit)
+        else:
+            benefits.append(benefit)
+
+    await state.update_data(benefits=benefits)
+
+    # Update keyboard
+    await callback.message.edit_reply_markup(
+        reply_markup=get_benefits_keyboard(selected_benefits=benefits)
+    )
+
+
+@router.callback_query(VacancyCreationStates.benefits, F.data == "benefits_done")
+async def process_benefits_done(callback: CallbackQuery, state: FSMContext):
+    """Finish benefits selection."""
+    await callback.answer()
+
+    data = await state.get_data()
+    benefits = data.get("benefits", [])
+
+    await callback.message.edit_text("✅ Дополнительные преимущества указаны", reply_markup=None)
+
+    await callback.message.answer(
+        "<b>Какие документы нужно предоставить при устройстве?</b>\n"
+        "(например: паспорт, медкнижка, ИНН)\n\n"
+        "Каждый документ с новой строки, или введите '-'"
+    )
+    await state.set_state(VacancyCreationStates.required_documents)
+
+
+@router.callback_query(VacancyCreationStates.benefits, F.data == "benefits_skip")
+async def process_benefits_skip(callback: CallbackQuery, state: FSMContext):
+    """Skip benefits selection."""
+    await callback.answer()
+
+    await state.update_data(benefits=[])
+
+    await callback.message.edit_text("⏭️ Преимущества пропущены", reply_markup=None)
+
+    await callback.message.answer(
         "<b>Какие документы нужно предоставить при устройстве?</b>\n"
         "(например: паспорт, медкнижка, ИНН)\n\n"
         "Каждый документ с новой строки, или введите '-'"

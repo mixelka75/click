@@ -6,6 +6,7 @@ from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, status, Query
 from beanie import PydanticObjectId
+from pydantic import BaseModel
 from loguru import logger
 
 from backend.models import Response, User, Resume, Vacancy
@@ -90,47 +91,64 @@ async def create_response(
     return response
 
 
+class InvitationRequest(BaseModel):
+    """Request model for creating invitation."""
+    employer_id: str
+    applicant_id: str
+    vacancy_id: str
+    resume_id: str
+    invitation_message: Optional[str] = None
+
+
 @router.post(
     "/responses/invitation",
     response_model=Response,
     status_code=status.HTTP_201_CREATED,
     summary="Create invitation (employer invites applicant)"
 )
-async def create_invitation(
-    employer_id: PydanticObjectId,
-    applicant_id: PydanticObjectId,
-    vacancy_id: PydanticObjectId,
-    resume_id: PydanticObjectId,
-    message: Optional[str] = None
-):
+async def create_invitation(request: InvitationRequest):
     """Create an invitation from employer to applicant."""
     # Validate all entities exist
-    employer = await User.get(employer_id)
+    employer = await User.get(PydanticObjectId(request.employer_id))
     if not employer:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Employer not found"
         )
 
-    applicant = await User.get(applicant_id)
+    applicant = await User.get(PydanticObjectId(request.applicant_id))
     if not applicant:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Applicant not found"
         )
 
-    vacancy = await Vacancy.get(vacancy_id)
+    vacancy = await Vacancy.get(PydanticObjectId(request.vacancy_id))
     if not vacancy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Vacancy not found"
         )
 
-    resume = await Resume.get(resume_id)
+    resume = await Resume.get(PydanticObjectId(request.resume_id))
     if not resume:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Resume not found"
+        )
+
+    # Check if invitation already exists
+    existing = await Response.find_one(
+        Response.employer.id == employer.id,
+        Response.applicant.id == applicant.id,
+        Response.vacancy.id == vacancy.id,
+        Response.resume.id == resume.id,
+        Response.is_invitation == True
+    )
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Вы уже приглашали этого кандидата на эту вакансию"
         )
 
     # Create invitation
@@ -139,7 +157,7 @@ async def create_invitation(
         employer=employer,
         resume=resume,
         vacancy=vacancy,
-        invitation_message=message,
+        message=request.invitation_message,
         is_invitation=True,
         status=ResponseStatus.INVITED
     )

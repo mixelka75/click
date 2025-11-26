@@ -5,7 +5,7 @@ Resume model for MongoDB.
 from datetime import datetime
 from typing import Optional, List
 from beanie import Document, Indexed, Link
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from shared.constants import ResumeStatus, EducationLevel, SalaryType
 from .user import User
 
@@ -128,6 +128,21 @@ class Resume(Document):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     published_at: Optional[datetime] = None
+
+    @field_validator("salary_type", mode="before")
+    def _normalize_salary_type(cls, v):
+        # Allow None to be converted to default NET
+        if v is None:
+            return SalaryType.NET
+        # If string provided, attempt to map to enum by value or name
+        if isinstance(v, str):
+            # Try to match by value
+            for st in SalaryType:
+                if v == st.value or v == st.name:
+                    return st
+            # Fallback: keep original string to let Pydantic raise if incompatible
+            return v
+        return v
 
     class Settings:
         name = "resumes"

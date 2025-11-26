@@ -58,3 +58,16 @@ class ResumeSearchStates(StatesGroup):
     select_vacancy = State()
     enter_invitation_message = State()
     confirm_invitation = State()
+
+
+class ChannelInviteStates(StatesGroup):
+    """States for inviting candidate from channel (deep link)."""
+
+    # Select vacancy for invitation
+    select_vacancy = State()
+
+    # Enter message to candidate
+    enter_message = State()
+
+    # Confirm and send
+    confirm_send = State()

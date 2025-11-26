@@ -10,6 +10,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Telegram Channels** - Automatic job posting and resume publication
 - **Analytics & Recommendations** - ML-based candidate-vacancy matching
 
+## Requirements
+
+- Python 3.11+
+- Docker & Docker Compose
+- MongoDB 7.0+
+- Redis 7+
+
 ## Quick Commands
 
 ### Development
@@ -82,6 +89,7 @@ docker-compose logs -f backend  # Backend logs only
 - `NotificationService`: Sends Telegram notifications to users
 - `AnalyticsService`: Tracks views, responses, conversions
 - `RecommendationService`: ML-based matching (position, skills, location, salary)
+- `ExpirationService`: Background task that archives expired vacancies/resumes and removes them from channels (runs hourly)
 
 **API-Bot Communication**: Bot calls backend API for all data operations
 - Bot handles user interaction and FSM state

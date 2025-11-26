@@ -575,8 +575,7 @@ async def process_photo(message: Message, state: FSMContext):
     await message.answer_photo(
         photo=photo.file_id,
         caption=preview_text,
-        reply_markup=get_confirm_publish_keyboard(),
-        show_caption_above_media=True
+        reply_markup=get_confirm_publish_keyboard()
     )
     await state.set_state(ResumeCreationStates.preview)
 

@@ -31,8 +31,8 @@ def format_chat_preview(chat: dict, current_user_id: str) -> str:
     unread_text = f" 🔴 {unread}" if unread > 0 else ""
 
     # Last message preview
-    last_msg = chat.get("last_message_text", "Нет сообщений")
-    if len(last_msg) > 50:
+    last_msg = chat.get("last_message_text") or "Нет сообщений"
+    if last_msg and len(last_msg) > 50:
         last_msg = last_msg[:50] + "..."
 
     return f"{participant_role}{unread_text}\n💬 {last_msg}"

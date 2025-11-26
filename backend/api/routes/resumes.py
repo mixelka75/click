@@ -45,6 +45,28 @@ class ResumeCreateRequest(BaseModel):
     publication_duration_days: Optional[int] = 30
 
 
+class ResumeUpdateRequest(BaseModel):
+    """Request model for updating resume fields."""
+    full_name: Optional[str] = None
+    citizenship: Optional[str] = None
+    birth_date: Optional[str] = None
+    city: Optional[str] = None
+    phone: Optional[str] = None
+    desired_position: Optional[str] = None
+    position_category: Optional[str] = None
+    ready_to_relocate: Optional[bool] = None
+    ready_for_business_trips: Optional[bool] = None
+    email: Optional[str] = None
+    photo_file_id: Optional[str] = None
+    desired_salary: Optional[int] = None
+    salary_type: Optional[str] = None
+    work_schedule: Optional[List[str]] = None
+    skills: Optional[List[str]] = None
+    about: Optional[str] = None
+    cuisines: Optional[List[str]] = None
+    specialization: Optional[str] = None
+
+
 @router.post(
     "/resumes",
     response_model=Resume,
@@ -251,7 +273,7 @@ async def get_user_resumes(user_id: PydanticObjectId):
     response_model=Resume,
     summary="Update resume"
 )
-async def update_resume(resume_id: PydanticObjectId, **kwargs):
+async def update_resume(resume_id: PydanticObjectId, update_data: ResumeUpdateRequest):
     """Update resume fields."""
     resume = await Resume.get(resume_id)
     if not resume:
@@ -260,10 +282,14 @@ async def update_resume(resume_id: PydanticObjectId, **kwargs):
             detail="Resume not found"
         )
 
-    # Update timestamp
-    kwargs["updated_at"] = datetime.utcnow()
+    # Convert to dict and remove None values
+    update_dict = update_data.model_dump(exclude_unset=True)
 
-    await resume.set(kwargs)
+    # Update timestamp
+    update_dict["updated_at"] = datetime.utcnow()
+
+    # Update the resume
+    await resume.set(update_dict)
     return resume
 
 

@@ -182,12 +182,15 @@ async def start_writing(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
     chat_id = callback.data.split(":")[-1]
-    await state.update_data(current_chat_id=chat_id)
+    await state.update_data(current_chat_id=chat_id, chat_prompt_message_id=callback.message.message_id)
 
-    await callback.message.answer(
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data=f"chat:open:{chat_id}"))
+
+    await callback.message.edit_text(
         "✍️ <b>Напишите сообщение</b>\n\n"
-        "Отправьте текст, фото или документ.\n"
-        "Используйте /cancel для отмены."
+        "Отправьте текст, фото или документ.",
+        reply_markup=builder.as_markup()
     )
     await state.set_state(ChatStates.waiting_for_message)
 
@@ -204,6 +207,7 @@ async def process_message(message: Message, state: FSMContext):
 
     data = await state.get_data()
     chat_id = data.get("current_chat_id")
+    prompt_message_id = data.get("chat_prompt_message_id")
 
     if not chat_id:
         await message.answer("❌ Ошибка: ID чата не найден")
@@ -242,13 +246,66 @@ async def process_message(message: Message, state: FSMContext):
             )
 
             if response.status_code == 201:
-                await message.answer(
-                    "✅ Сообщение отправлено!",
-                    reply_markup=InlineKeyboardBuilder().row(
-                        InlineKeyboardButton(text="💬 Вернуться к чату", callback_data=f"chat:open:{chat_id}")
-                    ).as_markup()
-                )
                 logger.info(f"Message sent in chat {chat_id} by user {user.id}")
+
+                # Delete user's message to keep chat clean
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+
+                # Edit the prompt message to show success and return to chat
+                if prompt_message_id:
+                    try:
+                        # Reload chat and show it
+                        chat_response = await client.get(
+                            f"{settings.api_url}/chats/{chat_id}",
+                            params={"user_id": str(user.id)}
+                        )
+
+                        if chat_response.status_code == 200:
+                            chat_data = chat_response.json()
+                            messages_list = chat_data.get("messages", [])
+
+                            # Format messages
+                            if not messages_list:
+                                chat_text = "💬 <b>Чат</b>\n\n<i>Нет сообщений.</i>"
+                            else:
+                                chat_text = "💬 <b>Чат</b>\n\n"
+                                for msg in messages_list[-20:]:
+                                    sender_id = msg["sender_id"]
+                                    is_own = sender_id == str(user.id)
+                                    sender = "Вы" if is_own else "Собеседник"
+
+                                    timestamp = msg["timestamp"]
+                                    from datetime import datetime
+                                    if isinstance(timestamp, str):
+                                        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                                        time_str = dt.strftime("%d.%m %H:%M")
+                                    else:
+                                        time_str = ""
+
+                                    chat_text += f"<b>{sender}</b> <i>{time_str}</i>\n"
+                                    chat_text += f"{msg['text']}\n\n"
+
+                                if len(messages_list) > 20:
+                                    chat_text = f"<i>Показаны последние 20 из {len(messages_list)} сообщений</i>\n\n" + chat_text
+
+                            builder = InlineKeyboardBuilder()
+                            builder.row(InlineKeyboardButton(text="✍️ Написать", callback_data=f"chat:write:{chat_id}"))
+                            builder.row(
+                                InlineKeyboardButton(text="🗄️ Архивировать", callback_data=f"chat:archive:{chat_id}"),
+                                InlineKeyboardButton(text="🔙 К списку", callback_data="chat:list")
+                            )
+
+                            await message.bot.edit_message_text(
+                                chat_id=message.chat.id,
+                                message_id=prompt_message_id,
+                                text=chat_text,
+                                reply_markup=builder.as_markup()
+                            )
+                    except Exception as e:
+                        logger.error(f"Error updating chat view: {e}")
             else:
                 await message.answer("❌ Ошибка при отправке сообщения")
 

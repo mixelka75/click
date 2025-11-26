@@ -13,7 +13,7 @@ from backend.models import User
 from shared.constants import UserRole
 from bot.states.resume_states import ResumeCreationStates
 from bot.states.vacancy_states import VacancyCreationStates
-from bot.states.search_states import ChannelInviteStates
+from bot.states.search_states import ChannelInviteStates, ChannelApplyStates
 from bot.keyboards.positions import get_position_categories_keyboard
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import httpx
@@ -55,14 +55,7 @@ async def handle_deep_link(message: Message, state: FSMContext, user: User, para
                 )
                 return
 
-            await message.answer(
-                f"📬 <b>Отклик на вакансию</b>\n\n"
-                f"Вы собираетесь откликнуться на вакансию.\n\n"
-                f"ID вакансии: <code>{entity_id}</code>\n\n"
-                f"Функция отклика находится в разработке.\n"
-                f"Пока вы можете просмотреть вакансии в разделе 'Поиск работы'.",
-                reply_markup=get_main_menu_applicant()
-            )
+            await handle_vacancy_apply(message, state, user, entity_id)
 
         else:
             await message.answer("❌ Неверный тип ссылки.")
@@ -159,6 +152,95 @@ async def handle_resume_invite(message: Message, state: FSMContext, user: User, 
         await message.answer(
             "❌ Произошла ошибка при обработке приглашения. Попробуйте позже.",
             reply_markup=get_main_menu_employer()
+        )
+
+
+async def handle_vacancy_apply(message: Message, state: FSMContext, user: User, vacancy_id: str):
+    """Handle applicant applying to vacancy from channel."""
+    from backend.models import Resume, Vacancy
+
+    try:
+        # Get vacancy
+        vacancy = await Vacancy.get(PydanticObjectId(vacancy_id))
+        if not vacancy:
+            await message.answer(
+                "❌ Вакансия не найдена или была удалена.",
+                reply_markup=get_main_menu_applicant()
+            )
+            return
+
+        # Fetch employer user
+        await vacancy.fetch_link(Vacancy.user)
+        employer_user = vacancy.user
+        if not employer_user:
+            await message.answer(
+                "❌ Информация о работодателе недоступна.",
+                reply_markup=get_main_menu_applicant()
+            )
+            return
+
+        # Get applicant's published resumes
+        all_resumes = await Resume.find({"user.$id": user.id}).to_list()
+        resumes = [r for r in all_resumes if r.is_published]
+
+        if not resumes:
+            await message.answer(
+                "❌ <b>Нет опубликованных резюме</b>\n\n"
+                "Создайте и опубликуйте резюме, чтобы откликаться на вакансии.",
+                reply_markup=get_main_menu_applicant()
+            )
+            return
+
+        # Save data to state
+        await state.update_data(
+            apply_vacancy_id=vacancy_id,
+            apply_employer_id=str(employer_user.id),
+            apply_employer_telegram_id=employer_user.telegram_id,
+            apply_vacancy_position=vacancy.position,
+            apply_vacancy_company=vacancy.company_name
+        )
+
+        # Show vacancy info and resume selection
+        text = (
+            f"📬 <b>Отклик на вакансию</b>\n\n"
+            f"<b>Вакансия:</b> {vacancy.position}\n"
+        )
+        if vacancy.company_name:
+            text += f"<b>Компания:</b> {vacancy.company_name}\n"
+        if vacancy.city:
+            text += f"<b>Город:</b> {vacancy.city}\n"
+        if vacancy.salary_min or vacancy.salary_max:
+            if vacancy.salary_min and vacancy.salary_max:
+                text += f"<b>Зарплата:</b> {vacancy.salary_min:,} - {vacancy.salary_max:,} ₽\n"
+            elif vacancy.salary_min:
+                text += f"<b>Зарплата:</b> от {vacancy.salary_min:,} ₽\n"
+            else:
+                text += f"<b>Зарплата:</b> до {vacancy.salary_max:,} ₽\n"
+
+        text += "\n<b>Выберите резюме для отклика:</b>"
+
+        # Build resume selection keyboard
+        builder = InlineKeyboardBuilder()
+        for resume in resumes:
+            salary_text = ""
+            if resume.desired_salary:
+                salary_text = f" ({resume.desired_salary:,}₽)"
+
+            builder.row(InlineKeyboardButton(
+                text=f"📄 {resume.desired_position}{salary_text}",
+                callback_data=f"ch_apply_res:{resume.id}"
+            ))
+
+        builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="ch_apply_cancel"))
+
+        await message.answer(text, reply_markup=builder.as_markup())
+        await state.set_state(ChannelApplyStates.select_resume)
+
+    except Exception as e:
+        logger.error(f"Error in handle_vacancy_apply: {e}")
+        await message.answer(
+            "❌ Произошла ошибка при обработке отклика. Попробуйте позже.",
+            reply_markup=get_main_menu_applicant()
         )
 
 
@@ -658,3 +740,266 @@ async def open_messages_from_notification(callback: CallbackQuery, state: FSMCon
     except Exception as e:
         logger.error(f"Error loading chats from notification: {e}")
         await callback.message.answer("❌ Ошибка при загрузке чатов")
+
+
+# ============================================================================
+# CHANNEL APPLY HANDLERS (when applicant clicks "Откликнуться" in channel)
+# ============================================================================
+
+@router.callback_query(ChannelApplyStates.select_resume, F.data.startswith("ch_apply_res:"))
+async def process_resume_selection_for_apply(callback: CallbackQuery, state: FSMContext):
+    """Process resume selection for channel apply."""
+    await callback.answer()
+
+    resume_id = callback.data.split(":")[1]
+
+    # Get resume info
+    from backend.models import Resume
+    resume = await Resume.get(PydanticObjectId(resume_id))
+
+    if not resume:
+        await callback.message.edit_text("❌ Резюме не найдено.")
+        await state.clear()
+        return
+
+    # Save resume to state
+    await state.update_data(
+        apply_resume_id=resume_id,
+        apply_resume_position=resume.desired_position,
+        apply_resume_name=resume.full_name
+    )
+
+    data = await state.get_data()
+
+    # Ask for cover letter
+    text = (
+        f"✉️ <b>Напишите сопроводительное письмо</b>\n\n"
+        f"<b>Вакансия:</b> {data.get('apply_vacancy_position')}\n"
+        f"<b>Ваше резюме:</b> {resume.desired_position}\n\n"
+        f"Напишите сопроводительное письмо или нажмите «Пропустить».\n"
+        f"Хорошее письмо повысит шансы на приглашение!"
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⏭ Пропустить", callback_data="ch_apply_skip_letter"))
+    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="ch_apply_cancel"))
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await state.set_state(ChannelApplyStates.enter_cover_letter)
+
+
+@router.message(ChannelApplyStates.enter_cover_letter)
+async def process_cover_letter(message: Message, state: FSMContext):
+    """Process cover letter text."""
+    cover_letter = message.text.strip()
+
+    if len(cover_letter) > 1000:
+        await message.answer(
+            "❌ Письмо слишком длинное.\n"
+            "Максимум 1000 символов. Сократите письмо:"
+        )
+        return
+
+    await state.update_data(apply_cover_letter=cover_letter)
+    await show_apply_confirmation(message, state, edit=False)
+
+
+@router.callback_query(ChannelApplyStates.enter_cover_letter, F.data == "ch_apply_skip_letter")
+async def skip_cover_letter(callback: CallbackQuery, state: FSMContext):
+    """Skip cover letter."""
+    await callback.answer()
+    await state.update_data(apply_cover_letter=None)
+    await show_apply_confirmation(callback.message, state, edit=True)
+
+
+async def show_apply_confirmation(message: Message, state: FSMContext, edit: bool = False):
+    """Show application confirmation."""
+    data = await state.get_data()
+
+    text = (
+        f"📋 <b>Подтвердите отклик</b>\n\n"
+        f"<b>Вакансия:</b> {data.get('apply_vacancy_position')}\n"
+        f"<b>Компания:</b> {data.get('apply_vacancy_company', 'Не указана')}\n\n"
+        f"<b>Ваше резюме:</b> {data.get('apply_resume_position')}\n"
+    )
+
+    cover_letter = data.get('apply_cover_letter')
+    if cover_letter:
+        preview = cover_letter[:150] + "..." if len(cover_letter) > 150 else cover_letter
+        text += f"\n<b>Сопроводительное письмо:</b>\n<i>{preview}</i>\n"
+    else:
+        text += f"\n<i>Без сопроводительного письма</i>\n"
+
+    text += "\n<b>Отправить отклик?</b>"
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="✅ Отправить", callback_data="ch_apply_confirm"))
+    builder.row(InlineKeyboardButton(text="✏️ Изменить письмо", callback_data="ch_apply_edit_letter"))
+    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="ch_apply_cancel"))
+
+    await state.set_state(ChannelApplyStates.confirm_send)
+
+    if edit:
+        await message.edit_text(text, reply_markup=builder.as_markup())
+    else:
+        await message.answer(text, reply_markup=builder.as_markup())
+
+
+@router.callback_query(ChannelApplyStates.confirm_send, F.data == "ch_apply_confirm")
+async def confirm_channel_apply(callback: CallbackQuery, state: FSMContext):
+    """Confirm and send application."""
+    await callback.answer("Отправка отклика...")
+
+    data = await state.get_data()
+    telegram_id = callback.from_user.id
+    user = await User.find_one(User.telegram_id == telegram_id)
+
+    if not user:
+        await callback.message.edit_text("❌ Ошибка: пользователь не найден.")
+        await state.clear()
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # 1. Create Response (application)
+            response_data = {
+                "applicant_id": str(user.id),
+                "employer_id": data.get('apply_employer_id'),
+                "vacancy_id": data.get('apply_vacancy_id'),
+                "resume_id": data.get('apply_resume_id'),
+                "message": data.get('apply_cover_letter')
+            }
+
+            response = await client.post(
+                f"{settings.api_url}/responses",
+                params=response_data
+            )
+
+            if response.status_code not in (200, 201):
+                error_detail = response.json().get("detail", "Неизвестная ошибка")
+                await callback.message.edit_text(f"❌ Ошибка: {error_detail}")
+                await state.clear()
+                return
+
+            application_result = response.json()
+            response_id = application_result.get("id") or application_result.get("_id")
+
+            # 2. Create or get chat
+            chat_id = None
+            if response_id:
+                chat_response = await client.post(
+                    f"{settings.api_url}/chats/create",
+                    params={"response_id": response_id}
+                )
+                if chat_response.status_code == 201:
+                    chat_data = chat_response.json()
+                    chat_id = chat_data.get("id")
+
+                    # 3. Send cover letter as first message if exists
+                    cover_letter = data.get('apply_cover_letter')
+                    if cover_letter and chat_id:
+                        await client.post(
+                            f"{settings.api_url}/chats/{chat_id}/messages",
+                            json={
+                                "sender_id": str(user.id),
+                                "text": cover_letter
+                            }
+                        )
+
+        # Build success message
+        builder = InlineKeyboardBuilder()
+        if chat_id:
+            builder.row(InlineKeyboardButton(text="💬 Открыть чат", callback_data=f"chat:open:{chat_id}"))
+        builder.row(InlineKeyboardButton(text="🏠 В меню", callback_data="menu:applicant"))
+
+        await callback.message.edit_text(
+            f"✅ <b>Отклик отправлен!</b>\n\n"
+            f"<b>Вакансия:</b> {data.get('apply_vacancy_position')}\n"
+            f"<b>Компания:</b> {data.get('apply_vacancy_company', 'Не указана')}\n\n"
+            f"Работодатель получит уведомление о вашем отклике.\n"
+            f"Ожидайте ответа или напишите в чат.",
+            reply_markup=builder.as_markup()
+        )
+
+        # 4. Send notification to employer
+        employer_telegram_id = data.get('apply_employer_telegram_id')
+        if employer_telegram_id:
+            notification_builder = InlineKeyboardBuilder()
+            notification_builder.row(InlineKeyboardButton(
+                text="💬 Открыть сообщения",
+                callback_data="open_messages"
+            ))
+
+            try:
+                await callback.bot.send_message(
+                    chat_id=employer_telegram_id,
+                    text=(
+                        f"📬 <b>Новый отклик на вакансию!</b>\n\n"
+                        f"💼 <b>Вакансия:</b> {data.get('apply_vacancy_position')}\n"
+                        f"👤 <b>Кандидат:</b> {data.get('apply_resume_name', 'Не указано')}\n"
+                        f"📄 <b>Должность в резюме:</b> {data.get('apply_resume_position')}\n\n"
+                        f"Перейдите в раздел «💬 Сообщения» чтобы ответить."
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=notification_builder.as_markup()
+                )
+            except Exception as e:
+                logger.error(f"Failed to send notification to employer: {e}")
+
+        logger.info(f"Applicant {user.id} applied to vacancy {data.get('apply_vacancy_id')}")
+
+    except Exception as e:
+        logger.error(f"Error sending application: {e}")
+        await callback.message.edit_text(
+            "❌ Произошла ошибка при отправке отклика. Попробуйте позже."
+        )
+
+    await state.clear()
+
+
+@router.callback_query(ChannelApplyStates.confirm_send, F.data == "ch_apply_edit_letter")
+async def edit_cover_letter(callback: CallbackQuery, state: FSMContext):
+    """Allow user to edit the cover letter."""
+    await callback.answer()
+
+    data = await state.get_data()
+
+    text = (
+        f"✏️ <b>Измените сопроводительное письмо</b>\n\n"
+        f"<b>Вакансия:</b> {data.get('apply_vacancy_position')}\n"
+        f"<b>Ваше резюме:</b> {data.get('apply_resume_position')}\n\n"
+        f"Напишите новое письмо или нажмите «Пропустить»:"
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⏭ Пропустить", callback_data="ch_apply_skip_letter"))
+    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="ch_apply_cancel"))
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
+    await state.set_state(ChannelApplyStates.enter_cover_letter)
+
+
+@router.callback_query(F.data == "ch_apply_cancel")
+async def cancel_channel_apply(callback: CallbackQuery, state: FSMContext):
+    """Cancel channel application process."""
+    await callback.answer()
+    await state.clear()
+
+    await callback.message.edit_text(
+        "❌ Отклик отменён.",
+        reply_markup=InlineKeyboardBuilder().row(
+            InlineKeyboardButton(text="🏠 В меню", callback_data="menu:applicant")
+        ).as_markup()
+    )
+
+
+@router.callback_query(F.data == "menu:applicant")
+async def go_to_applicant_menu(callback: CallbackQuery, state: FSMContext):
+    """Return to applicant menu."""
+    await callback.answer()
+    await state.clear()
+
+    await callback.message.answer(
+        "📋 Главное меню:",
+        reply_markup=get_main_menu_applicant()
+    )

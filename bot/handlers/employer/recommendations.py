@@ -126,9 +126,27 @@ async def show_resume_recommendations(message: Message, vacancy_id: str, state: 
             )
             return
 
-        # Save recommendations to state for navigation
+        # Save recommendations to state for navigation (serialize for Redis)
+        recs_serialized = []
+        for rec in recommendations:
+            recs_serialized.append({
+                "resume_id": str(rec.resume.id),
+                "score": rec.score,
+                "match_details": rec.match_details.model_dump() if hasattr(rec.match_details, 'model_dump') else dict(rec.match_details),
+                # Cache key resume fields for display
+                "resume_data": {
+                    "desired_position": rec.resume.desired_position,
+                    "full_name": rec.resume.full_name,
+                    "city": rec.resume.city,
+                    "desired_salary": rec.resume.desired_salary,
+                    "total_experience_years": rec.resume.total_experience_years,
+                    "about": rec.resume.about,
+                    "skills": rec.resume.skills or [],
+                }
+            })
+
         await state.update_data(
-            current_candidate_recs=recommendations,
+            current_candidate_recs=recs_serialized,
             current_candidate_index=0,
             current_vacancy_id=vacancy_id  # Save vacancy ID for later use
         )
@@ -152,52 +170,53 @@ async def show_candidate_card(message: Message, state: FSMContext, index: int, e
             return
 
         rec = recommendations[index]
-        resume = rec.resume  # ResumeRecommendation object
-        score = rec.score
-        match_details = rec.match_details
+        resume_id = rec["resume_id"]
+        resume = rec["resume_data"]  # Cached resume data dict
+        score = rec["score"]
+        match_details = rec["match_details"]
 
         # Format candidate card
         text = f"💡 <b>Рекомендация #{index + 1} из {len(recommendations)}</b>\n"
         text += f"🎯 <b>Совпадение: {score}%</b>\n\n"
 
-        text += f"<b>{resume.desired_position}</b>\n\n"
+        text += f"<b>{resume.get('desired_position', 'Не указана')}</b>\n\n"
 
-        if resume.full_name:
-            text += f"👤 {resume.full_name}\n"
+        if resume.get("full_name"):
+            text += f"👤 {resume['full_name']}\n"
 
-        if resume.city:
-            match_icon = "✅" if match_details.location_match else "📍"
-            text += f"{match_icon} {resume.city}\n"
+        if resume.get("city"):
+            match_icon = "✅" if match_details.get("location_match") else "📍"
+            text += f"{match_icon} {resume['city']}\n"
 
-        if resume.desired_salary:
-            salary_icon = "✅" if match_details.salary_compatible else "💰"
-            text += f"{salary_icon} Зарплата: {resume.desired_salary:,} руб.\n"
+        if resume.get("desired_salary"):
+            salary_icon = "✅" if match_details.get("salary_compatible") else "💰"
+            text += f"{salary_icon} Зарплата: {resume['desired_salary']:,} руб.\n"
 
-        if resume.total_experience_years is not None:
-            exp_icon = "✅" if match_details.experience_sufficient else "📊"
-            years = resume.total_experience_years
+        if resume.get("total_experience_years") is not None:
+            exp_icon = "✅" if match_details.get("experience_sufficient") else "📊"
+            years = resume["total_experience_years"]
             text += f"{exp_icon} Опыт: {years} {_get_years_word(years)}\n"
 
         # Match details
         text += f"\n<b>📊 Детали совпадения:</b>\n"
 
-        if match_details.position_match:
+        if match_details.get("position_match"):
             text += "✅ Совпадение по позиции\n"
 
-        matched_skills = match_details.skills_matched
+        matched_skills = match_details.get("skills_matched", [])
         if matched_skills:
             text += f"✅ Навыки ({len(matched_skills)}): {', '.join(matched_skills[:5])}\n"
             if len(matched_skills) > 5:
                 text += f"   ... и еще {len(matched_skills) - 5}\n"
 
-        if match_details.location_match:
+        if match_details.get("location_match"):
             text += "✅ Совпадение по городу\n"
 
-        if match_details.salary_compatible:
+        if match_details.get("salary_compatible"):
             text += "✅ Подходящая зарплата\n"
 
-        if resume.about:
-            about = resume.about
+        if resume.get("about"):
+            about = resume["about"]
             if len(about) > 200:
                 about = about[:200] + "..."
             text += f"\n📝 {about}\n"
@@ -223,7 +242,6 @@ async def show_candidate_card(message: Message, state: FSMContext, index: int, e
         builder.row(*nav_buttons)
 
         # Action buttons
-        resume_id = str(resume.id)
         builder.row(
             InlineKeyboardButton(text="👀 Полное резюме", callback_data=f"view_full_resume_rec:{resume_id}")
         )

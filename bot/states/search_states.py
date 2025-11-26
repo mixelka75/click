@@ -71,3 +71,16 @@ class ChannelInviteStates(StatesGroup):
 
     # Confirm and send
     confirm_send = State()
+
+
+class ChannelApplyStates(StatesGroup):
+    """States for applying to vacancy from channel (deep link)."""
+
+    # Select resume for application
+    select_resume = State()
+
+    # Enter cover letter (optional)
+    enter_cover_letter = State()
+
+    # Confirm and send
+    confirm_send = State()

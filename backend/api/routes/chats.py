@@ -9,6 +9,7 @@ from typing import List, Optional
 from datetime import datetime
 from loguru import logger
 
+from beanie import Link
 from backend.models import Chat, Message, User, Response
 
 router = APIRouter(prefix="/chats", tags=["chats"])
@@ -54,6 +55,8 @@ class ChatDetailsResponse(BaseModel):
     applicant_id: str
     employer_id: str
     response_id: str
+    resume_id: Optional[str] = None
+    vacancy_id: Optional[str] = None
     messages: List[MessageResponse]
     is_archived: bool
 
@@ -136,6 +139,24 @@ async def get_chat_details(chat_id: str, user_id: str):
         chat.mark_as_read(user_id)
         await chat.save()
 
+        # Fetch response to get resume_id and vacancy_id
+        await chat.fetch_link(Chat.response)
+        response_obj = chat.response
+        resume_id = None
+        vacancy_id = None
+        if response_obj and not isinstance(response_obj, Link):
+            # resume/vacancy can be Link or fetched object
+            if response_obj.resume:
+                if isinstance(response_obj.resume, Link):
+                    resume_id = str(response_obj.resume.ref.id)
+                else:
+                    resume_id = str(response_obj.resume.id)
+            if response_obj.vacancy:
+                if isinstance(response_obj.vacancy, Link):
+                    vacancy_id = str(response_obj.vacancy.ref.id)
+                else:
+                    vacancy_id = str(response_obj.vacancy.id)
+
         # Format messages
         messages = [
             MessageResponse(
@@ -153,7 +174,9 @@ async def get_chat_details(chat_id: str, user_id: str):
             id=str(chat.id),
             applicant_id=str(chat.applicant.ref.id),
             employer_id=str(chat.employer.ref.id),
-            response_id=str(chat.response.ref.id),
+            response_id=str(chat.response.ref.id) if isinstance(chat.response, Link) else str(chat.response.id),
+            resume_id=resume_id,
+            vacancy_id=vacancy_id,
             messages=messages,
             is_archived=chat.is_archived_by(user_id)
         )

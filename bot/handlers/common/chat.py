@@ -14,6 +14,7 @@ from backend.models import User
 from bot.states.chat_states import ChatStates
 from config.settings import settings
 from bot.utils.formatters import format_date
+from shared.constants import UserRole
 
 router = Router()
 
@@ -160,13 +161,26 @@ async def open_chat(callback: CallbackQuery, state: FSMContext):
             builder.row(
                 InlineKeyboardButton(text="✍️ Написать", callback_data=f"chat:write:{chat_id}")
             )
+
+            # Add button for viewing resume/vacancy based on user role
+            resume_id = chat.get("resume_id")
+            vacancy_id = chat.get("vacancy_id")
+            if user.role == UserRole.EMPLOYER and resume_id:
+                builder.row(
+                    InlineKeyboardButton(text="📄 Резюме", callback_data=f"chatres:{resume_id}")
+                )
+            elif user.role == UserRole.APPLICANT and vacancy_id:
+                builder.row(
+                    InlineKeyboardButton(text="💼 Вакансия", callback_data=f"chatvac:{vacancy_id}")
+                )
+
             builder.row(
                 InlineKeyboardButton(text="🗄️ Архивировать", callback_data=f"chat:archive:{chat_id}"),
                 InlineKeyboardButton(text="🔙 К списку", callback_data="chat:list")
             )
 
             await callback.message.edit_text(text, reply_markup=builder.as_markup())
-            await state.update_data(current_chat_id=chat_id)
+            await state.update_data(current_chat_id=chat_id, resume_id=resume_id, vacancy_id=vacancy_id)
             await state.set_state(ChatStates.in_chat)
 
     except httpx.TimeoutException:
@@ -293,6 +307,19 @@ async def process_message(message: Message, state: FSMContext):
 
                             builder = InlineKeyboardBuilder()
                             builder.row(InlineKeyboardButton(text="✍️ Написать", callback_data=f"chat:write:{chat_id}"))
+
+                            # Add button for viewing resume/vacancy based on user role
+                            resume_id = data.get("resume_id")
+                            vacancy_id = data.get("vacancy_id")
+                            if user.role == UserRole.EMPLOYER and resume_id:
+                                builder.row(
+                                    InlineKeyboardButton(text="📄 Резюме", callback_data=f"chatres:{resume_id}")
+                                )
+                            elif user.role == UserRole.APPLICANT and vacancy_id:
+                                builder.row(
+                                    InlineKeyboardButton(text="💼 Вакансия", callback_data=f"chatvac:{vacancy_id}")
+                                )
+
                             builder.row(
                                 InlineKeyboardButton(text="🗄️ Архивировать", callback_data=f"chat:archive:{chat_id}"),
                                 InlineKeyboardButton(text="🔙 К списку", callback_data="chat:list")
@@ -408,3 +435,73 @@ async def archive_chat(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Error archiving chat: {e}")
         await callback.answer("❌ Ошибка при архивировании", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("chatres:"))
+async def view_resume_from_chat(callback: CallbackQuery, state: FSMContext):
+    """View resume details from chat."""
+    await callback.answer()
+
+    resume_id = callback.data.split(":")[1]
+    data = await state.get_data()
+    chat_id = data.get("current_chat_id")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{settings.api_url}/resumes/{resume_id}"
+            )
+
+            if response.status_code == 200:
+                resume = response.json()
+
+                # Format resume details
+                from bot.handlers.employer.resume_search import format_resume_details
+                text = format_resume_details(resume)
+
+                builder = InlineKeyboardBuilder()
+                if chat_id:
+                    builder.row(InlineKeyboardButton(text="◀️ Назад к чату", callback_data=f"chat:open:{chat_id}"))
+
+                await callback.message.edit_text(text, reply_markup=builder.as_markup())
+            else:
+                await callback.message.answer("❌ Резюме не найдено или было удалено.")
+
+    except Exception as e:
+        logger.error(f"Error viewing resume from chat: {e}")
+        await callback.message.answer("❌ Ошибка при загрузке резюме.")
+
+
+@router.callback_query(F.data.startswith("chatvac:"))
+async def view_vacancy_from_chat(callback: CallbackQuery, state: FSMContext):
+    """View vacancy details from chat."""
+    await callback.answer()
+
+    vacancy_id = callback.data.split(":")[1]
+    data = await state.get_data()
+    chat_id = data.get("current_chat_id")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{settings.api_url}/vacancies/{vacancy_id}"
+            )
+
+            if response.status_code == 200:
+                vacancy = response.json()
+
+                # Format vacancy details
+                from bot.handlers.applicant.vacancy_search import format_vacancy_details
+                text = format_vacancy_details(vacancy)
+
+                builder = InlineKeyboardBuilder()
+                if chat_id:
+                    builder.row(InlineKeyboardButton(text="◀️ Назад к чату", callback_data=f"chat:open:{chat_id}"))
+
+                await callback.message.edit_text(text, reply_markup=builder.as_markup())
+            else:
+                await callback.message.answer("❌ Вакансия не найдена или была удалена.")
+
+    except Exception as e:
+        logger.error(f"Error viewing vacancy from chat: {e}")
+        await callback.message.answer("❌ Ошибка при загрузке вакансии.")

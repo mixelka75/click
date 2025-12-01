@@ -32,7 +32,7 @@ class Education(BaseModel):
 class Course(BaseModel):
     """Training course or certification."""
     name: str
-    organization: str
+    organization: Optional[str] = None
     completion_year: Optional[int] = None
     certificate_url: Optional[str] = None
 

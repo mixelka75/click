@@ -10,6 +10,9 @@ services:
       - "27017:27017"
     environment:
       MONGO_INITDB_DATABASE: click_db
+      # Добавлено: учетные данные для root-пользователя MongoDB
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD}
     volumes:
       - mongodb_data:/data/db
       - mongodb_config:/data/configdb

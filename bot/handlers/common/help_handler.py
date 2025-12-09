@@ -25,7 +25,7 @@ async def cmd_help(message: Message):
             "Начните работу с ботом командой /start\n\n"
             "CLICK — это сервис для поиска работы и сотрудников в сфере HoReCa."
         )
-    elif user.role == UserRole.APPLICANT:
+    elif (user.current_role or user.role) == UserRole.APPLICANT:
         help_text = (
             "❓ <b>Помощь для соискателей</b>\n\n"
             "<b>Основные функции:</b>\n\n"

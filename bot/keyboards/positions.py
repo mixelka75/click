@@ -13,10 +13,13 @@ from shared.constants import (
     WAITER_POSITIONS,
     COOK_POSITIONS,
     BARISTA_POSITIONS,
+    HOOKAH_POSITIONS,     # NEW
+    HOUSEHOLD_POSITIONS,  # NEW
     MANAGEMENT_POSITIONS,
     SUPPORT_POSITIONS,
     CUISINES,
 )
+from typing import Dict
 
 
 def get_position_categories_keyboard() -> InlineKeyboardMarkup:
@@ -51,6 +54,8 @@ def get_positions_keyboard(category: str, show_all_option: bool = False) -> Inli
         "waiter": WAITER_POSITIONS,
         "cook": COOK_POSITIONS,
         "barista": BARISTA_POSITIONS,
+        "hookah": HOOKAH_POSITIONS,        # NEW
+        "household": HOUSEHOLD_POSITIONS,  # NEW
         "support": SUPPORT_POSITIONS,
     }
 
@@ -195,5 +200,128 @@ def get_skills_keyboard(category: str, selected: List[str] = None) -> InlineKeyb
         ))
     else:
         logger.warning(f"🔍 NO 'Done' button - no skills selected")
+
+    return builder.as_markup()
+
+
+# ==================== NEW: Multi-position selection ====================
+
+def get_positions_for_category(category: str) -> List[str]:
+    """Get list of positions for a category."""
+    positions_map = {
+        "barman": BARMAN_POSITIONS,
+        "waiter": WAITER_POSITIONS,
+        "cook": COOK_POSITIONS,
+        "barista": BARISTA_POSITIONS,
+        "hookah": HOOKAH_POSITIONS,
+        "household": HOUSEHOLD_POSITIONS,
+        "support": SUPPORT_POSITIONS,
+    }
+
+    if category == "management":
+        # Flatten management positions
+        all_positions = []
+        for positions in MANAGEMENT_POSITIONS.values():
+            all_positions.extend(positions)
+        return all_positions
+
+    return positions_map.get(category, [])
+
+
+def get_multi_position_keyboard(
+    category: str,
+    selected_positions: List[str] = None
+) -> InlineKeyboardMarkup:
+    """Keyboard for selecting multiple positions within a category."""
+    if selected_positions is None:
+        selected_positions = []
+
+    builder = InlineKeyboardBuilder()
+
+    positions = get_positions_for_category(category)
+
+    for idx, position in enumerate(positions):
+        prefix = "✅ " if position in selected_positions else ""
+        builder.add(InlineKeyboardButton(
+            text=f"{prefix}{position}",
+            callback_data=f"pos_toggle:{idx}"
+        ))
+
+    # Arrange in 1 column for better readability
+    builder.adjust(1)
+
+    # Custom position option
+    builder.row(InlineKeyboardButton(
+        text="✏️ Не нашли подходящий вариант?",
+        callback_data="pos_custom"
+    ))
+
+    # Done button (only if at least one selected)
+    if selected_positions:
+        builder.row(InlineKeyboardButton(
+            text="✅ Готово с этой категорией",
+            callback_data="pos_category_done"
+        ))
+
+    # Back button
+    builder.row(InlineKeyboardButton(
+        text="◀️ Назад к категориям",
+        callback_data="back_to_categories"
+    ))
+
+    return builder.as_markup()
+
+
+def get_combined_skills_keyboard(
+    position_categories: List[str],
+    selected_skills: List[str] = None
+) -> InlineKeyboardMarkup:
+    """Keyboard for selecting skills from multiple position categories."""
+    from shared.constants import SKILLS_BY_CATEGORY
+
+    if selected_skills is None:
+        selected_skills = []
+
+    builder = InlineKeyboardBuilder()
+
+    # Collect skills from all selected categories
+    all_skills = []
+    seen = set()
+
+    for cat in position_categories:
+        cat_skills = SKILLS_BY_CATEGORY.get(cat, [])
+        for skill in cat_skills:
+            if skill not in seen:
+                seen.add(skill)
+                all_skills.append(skill)
+
+    # Add skill buttons
+    for idx, skill in enumerate(all_skills):
+        prefix = "✅ " if skill in selected_skills else ""
+        builder.add(InlineKeyboardButton(
+            text=f"{prefix}{skill}",
+            callback_data=f"skill:t:{idx}"
+        ))
+
+    builder.adjust(2)
+
+    # Custom skills option
+    builder.row(InlineKeyboardButton(
+        text="✏️ Добавить свои навыки",
+        callback_data="skill:custom"
+    ))
+
+    # Done button (if at least one selected)
+    if selected_skills:
+        builder.row(InlineKeyboardButton(
+            text="✅ Готово",
+            callback_data="skill:done"
+        ))
+
+    # Skip button
+    builder.row(InlineKeyboardButton(
+        text="⏭ Пропустить",
+        callback_data="skill:skip"
+    ))
 
     return builder.as_markup()

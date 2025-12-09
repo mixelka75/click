@@ -1,5 +1,6 @@
 """
-Complete resume creation flow with all steps.
+Resume creation flow - Part 1: Basic information and position selection.
+Updated for multi-position selection, city buttons, and new text style.
 """
 
 from aiogram import Router, F
@@ -7,16 +8,14 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from datetime import datetime
 from loguru import logger
-import httpx
 
 from bot.states.resume_states import ResumeCreationStates
 from bot.filters import IsNotMenuButton
 from bot.keyboards.positions import (
     get_position_categories_keyboard,
-    get_positions_keyboard,
+    get_multi_position_keyboard,
+    get_positions_for_category,
     get_cuisines_keyboard,
-    get_work_schedule_keyboard,
-    get_skills_keyboard,
 )
 from bot.keyboards.common import (
     get_cancel_keyboard,
@@ -24,34 +23,26 @@ from bot.keyboards.common import (
     get_skip_inline_button,
     get_yes_no_keyboard,
     get_skip_button,
-    get_confirm_publish_keyboard,
+    get_city_selection_keyboard,
+    get_position_summary_keyboard,
     get_confirm_telegram_keyboard,
 )
-from bot.utils.formatters import format_resume_preview
-from backend.models import User, Resume, WorkExperience, Education, Course, Language as LangModel
-from shared.constants import (
-    UserRole,
-    SalaryType,
-)
-from config.settings import settings
+from shared.constants import PRESET_CITIES, CUISINES
 
 
 from bot.utils.cancel_handlers import handle_cancel_resume
 
 
 router = Router()
-# ВОССТАНОВЛЕНО: фильтр, блокирующий обработку меню-кнопок FSM хендлерами
 router.message.filter(IsNotMenuButton())
 
-# Удалён DEBUG catch-all хендлер, перехватывавший все текстовые сообщения и ломавший сценарий.
-# Если потребуется локальная отладка, добавьте временный хендлер с более узким фильтром.
 
 # ============ BASIC INFORMATION ============
 
 @router.message(ResumeCreationStates.full_name)
 async def process_full_name(message: Message, state: FSMContext):
     """Process full name."""
-    logger.warning(f"🔥 process_full_name CALLED! user={message.from_user.id}, text='{message.text}'")
+    logger.debug(f"process_full_name: user={message.from_user.id}, text='{message.text}'")
 
     if message.text == "🚫 Отменить создание":
         await handle_cancel_resume(message, state)
@@ -59,13 +50,14 @@ async def process_full_name(message: Message, state: FSMContext):
 
     full_name = message.text.strip()
     if len(full_name) < 3:
-        await message.answer("Пожалуйста, введите полное имя (минимум 3 символа).")
+        await message.answer("Имя должно быть не короче 3 символов. Попробуй ещё раз!")
         return
 
     await state.update_data(full_name=full_name)
     await message.answer(
-        "<b>Укажите ваше гражданство</b>\n"
-        "Например: Россия",
+        f"Отлично, {full_name.split()[0]}! 👋\n\n"
+        "<b>Укажи своё гражданство</b>\n"
+        "Например: Россия, Беларусь, Казахстан",
         reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.citizenship)
@@ -80,32 +72,23 @@ async def process_citizenship(message: Message, state: FSMContext):
 
     if message.text == "◀️ Назад":
         await message.answer(
-            "<b>Как вас зовут?</b> (ФИО полностью)",
+            "<b>Как тебя зовут?</b>\n"
+            "Напиши ФИО полностью",
             reply_markup=get_cancel_keyboard()
         )
         await state.set_state(ResumeCreationStates.full_name)
         return
 
     citizenship = message.text.strip()
-    if citizenship.lower() == "пропустить":
-        await state.update_data(citizenship=None)
-        await message.answer(
-            "<b>Введите вашу дату рождения</b>\n"
-            "Формат: ДД.ММ.ГГГГ (например: 15.08.1995)",
-            reply_markup=get_back_cancel_keyboard()
-        )
-        await state.set_state(ResumeCreationStates.birth_date)
-        return
-
     if len(citizenship) < 2:
         await message.answer(
-            "Пожалуйста, укажите гражданство. Например: Россия."
+            "Укажи гражданство, например: Россия"
         )
         return
 
     await state.update_data(citizenship=citizenship)
     await message.answer(
-        "<b>Введите вашу дату рождения</b>\n"
+        "<b>Когда у тебя день рождения?</b> 🎂\n"
         "Формат: ДД.ММ.ГГГГ (например: 15.08.1995)",
         reply_markup=get_back_cancel_keyboard()
     )
@@ -121,7 +104,8 @@ async def process_birth_date(message: Message, state: FSMContext):
 
     if message.text == "◀️ Назад":
         await message.answer(
-            "<b>Укажите ваше гражданство</b>\nНапример: Россия",
+            "<b>Укажи своё гражданство</b>\n"
+            "Например: Россия, Беларусь, Казахстан",
             reply_markup=get_back_cancel_keyboard()
         )
         await state.set_state(ResumeCreationStates.citizenship)
@@ -129,22 +113,12 @@ async def process_birth_date(message: Message, state: FSMContext):
 
     birth_date_raw = message.text.strip()
 
-    if birth_date_raw.lower() == "пропустить":
-        await state.update_data(birth_date=None)
-        await message.answer(
-            f"Отлично!\n\n"
-            f"<b>В каком городе вы находитесь?</b>\n"
-            f"Например: Москва, Санкт-Петербург, Казань...",
-            reply_markup=get_back_cancel_keyboard()
-        )
-        await state.set_state(ResumeCreationStates.city)
-        return
-
     try:
         parsed = datetime.strptime(birth_date_raw, "%d.%m.%Y").date()
     except ValueError:
         await message.answer(
-            "❌ Не получилось распознать дату. Укажите её в формате ДД.ММ.ГГГГ (например: 15.08.1995)."
+            "Не получилось распознать дату 🤔\n"
+            "Укажи её в формате ДД.ММ.ГГГГ (например: 15.08.1995)"
         )
         return
 
@@ -152,60 +126,131 @@ async def process_birth_date(message: Message, state: FSMContext):
     current_year = datetime.now().year
     if parsed.year < 1900 or parsed.year > current_year:
         await message.answer(
-            f"❌ Некорректный год рождения.\n"
-            f"Год должен быть в диапазоне от 1900 до {current_year}."
+            f"Год рождения должен быть от 1900 до {current_year}"
         )
         return
 
     # Check if age is reasonable (14-100 years old)
     age = current_year - parsed.year
     if age < 14:
-        await message.answer(
-            "❌ Возраст должен быть не менее 14 лет."
-        )
+        await message.answer("Для работы нужно быть старше 14 лет")
         return
     elif age > 100:
-        await message.answer(
-            "❌ Указан некорректный год рождения. Проверьте дату."
-        )
+        await message.answer("Проверь год рождения — что-то не сходится")
         return
 
     await state.update_data(birth_date=parsed.isoformat())
 
+    # Move to city selection with buttons
     await message.answer(
-        f"Отлично!\n\n"
-        f"<b>В каком городе вы находитесь?</b>\n"
-        f"Например: Москва, Санкт-Петербург, Казань...",
-        reply_markup=get_back_cancel_keyboard()
+        "<b>В каком городе ищешь работу?</b> 🏙\n"
+        "Выбери из списка или укажи свой:",
+        reply_markup=get_city_selection_keyboard()
     )
     await state.set_state(ResumeCreationStates.city)
 
 
+# ============ CITY SELECTION (BUTTONS) ============
+
+@router.callback_query(ResumeCreationStates.city, F.data.startswith("city_select:"))
+async def process_city_selection(callback: CallbackQuery, state: FSMContext):
+    """Process city selection from buttons."""
+    await callback.answer()
+
+    city_value = callback.data.split(":", 1)[1]
+
+    if city_value == "custom":
+        # User wants to enter custom city
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await callback.message.answer(
+            "<b>Напиши название своего города:</b>",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.city_custom)
+        return
+
+    # City selected from preset
+    await state.update_data(city=city_value)
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await callback.message.answer(
+        f"📍 Город: {city_value}\n\n"
+        "<b>Готов к переезду в другой город?</b>",
+        reply_markup=get_yes_no_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.ready_to_relocate)
+
+
 @router.message(ResumeCreationStates.city)
-async def process_city(message: Message, state: FSMContext):
-    """Process city."""
+async def process_city_text(message: Message, state: FSMContext):
+    """Handle text input on city selection (back/cancel buttons)."""
     if message.text == "🚫 Отменить создание":
         await handle_cancel_resume(message, state)
         return
 
     if message.text == "◀️ Назад":
-        # Return to full name
         await message.answer(
-            "<b>Как вас зовут?</b> (ФИО полностью)",
-            reply_markup=get_cancel_keyboard()
+            "<b>Когда у тебя день рождения?</b> 🎂\n"
+            "Формат: ДД.ММ.ГГГГ (например: 15.08.1995)",
+            reply_markup=get_back_cancel_keyboard()
         )
-        await state.set_state(ResumeCreationStates.full_name)
+        await state.set_state(ResumeCreationStates.birth_date)
         return
 
+    # User typed city directly instead of using buttons
     city = message.text.strip()
-    await state.update_data(city=city)
+    if len(city) < 2:
+        await message.answer("Название города слишком короткое")
+        return
 
+    await state.update_data(city=city)
     await message.answer(
-        "<b>Готовы к переезду в другой город?</b>",
+        f"📍 Город: {city}\n\n"
+        "<b>Готов к переезду в другой город?</b>",
         reply_markup=get_yes_no_keyboard()
     )
     await state.set_state(ResumeCreationStates.ready_to_relocate)
 
+
+@router.message(ResumeCreationStates.city_custom)
+async def process_city_custom(message: Message, state: FSMContext):
+    """Process custom city input."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>В каком городе ищешь работу?</b> 🏙\n"
+            "Выбери из списка или укажи свой:",
+            reply_markup=get_city_selection_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.city)
+        return
+
+    city = message.text.strip()
+    if len(city) < 2:
+        await message.answer("Название города слишком короткое")
+        return
+
+    await state.update_data(city=city)
+    await message.answer(
+        f"📍 Город: {city}\n\n"
+        "<b>Готов к переезду в другой город?</b>",
+        reply_markup=get_yes_no_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.ready_to_relocate)
+
+
+# ============ RELOCATE ============
 
 @router.callback_query(ResumeCreationStates.ready_to_relocate, F.data.startswith("confirm:"))
 async def process_relocate(callback: CallbackQuery, state: FSMContext):
@@ -215,29 +260,29 @@ async def process_relocate(callback: CallbackQuery, state: FSMContext):
     ready = callback.data == "confirm:yes"
     await state.update_data(ready_to_relocate=ready)
 
-    # Удаляем старые кнопки
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
 
+    # Skip business trips question - go directly to phone
     await callback.message.answer(
-        f"{'✅ Готов' if ready else '❌ Не готов'} к переезду\n\n"
-        "<b>Готовы к командировкам?</b>",
-        reply_markup=get_yes_no_keyboard()
+        f"{'✅ Готов к переезду' if ready else '📍 Не готов к переезду'}\n\n"
+        "<b>Укажи свой номер телефона</b> 📱\n"
+        "Можно в формате +7... или 8...",
+        reply_markup=get_back_cancel_keyboard()
     )
-    await state.set_state(ResumeCreationStates.ready_for_business_trips)
+    await state.set_state(ResumeCreationStates.phone)
 
 
 @router.message(ResumeCreationStates.ready_to_relocate)
 async def process_relocate_text(message: Message, state: FSMContext):
     """Handle text input on relocate question (back button)."""
     if message.text == "◀️ Назад":
-        data = await state.get_data()
         await message.answer(
-            f"<b>В каком городе вы находитесь?</b>\n"
-            f"Например: Москва, Санкт-Петербург, Казань...",
-            reply_markup=get_back_cancel_keyboard()
+            "<b>В каком городе ищешь работу?</b> 🏙\n"
+            "Выбери из списка или укажи свой:",
+            reply_markup=get_city_selection_keyboard()
         )
         await state.set_state(ResumeCreationStates.city)
         return
@@ -247,87 +292,83 @@ async def process_relocate_text(message: Message, state: FSMContext):
         return
 
 
-@router.callback_query(ResumeCreationStates.ready_for_business_trips, F.data.startswith("confirm:"))
-async def process_business_trips(callback: CallbackQuery, state: FSMContext):
-    """Process business trips."""
-    await callback.answer()
-
-    ready = callback.data == "confirm:yes"
-    await state.update_data(ready_for_business_trips=ready)
-
-    # Удаляем кнопки
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    await callback.message.answer(
-        f"{'✅ Готов' if ready else '❌ Не готов'} к командировкам\n\n"
-        "<b>Укажите ваш номер телефона</b>\n"
-        "Формат: +79001234567",
-        reply_markup=get_back_cancel_keyboard()
-    )
-    await state.set_state(ResumeCreationStates.phone)
-
+# ============ PHONE (accepts +7 and 8) ============
 
 @router.message(ResumeCreationStates.phone)
 async def process_phone(message: Message, state: FSMContext):
-    """Process phone number."""
+    """Process phone number - accepts both +7 and 8 formats."""
     if message.text == "🚫 Отменить создание":
         await handle_cancel_resume(message, state)
         return
 
     if message.text == "◀️ Назад":
-        # Return to business trips question
         await message.answer(
-            "<b>Готовы к командировкам?</b>",
+            "<b>Готов к переезду в другой город?</b>",
             reply_markup=get_yes_no_keyboard()
         )
-        await state.set_state(ResumeCreationStates.ready_for_business_trips)
+        await state.set_state(ResumeCreationStates.ready_to_relocate)
         return
 
     phone = message.text.strip()
 
-    # Basic validation
-    if not phone.startswith("+") or len(phone) < 10:
+    # Normalize phone number
+    phone_digits = ''.join(filter(str.isdigit, phone))
+
+    # Validate phone format
+    if phone.startswith("+7"):
+        if len(phone_digits) != 11:
+            await message.answer(
+                "Номер должен содержать 11 цифр после +7\n"
+                "Например: +79001234567"
+            )
+            return
+        normalized_phone = f"+7{phone_digits[1:]}"
+    elif phone.startswith("8"):
+        if len(phone_digits) != 11:
+            await message.answer(
+                "Номер должен содержать 11 цифр\n"
+                "Например: 89001234567"
+            )
+            return
+        # Convert 8 to +7 for storage
+        normalized_phone = f"+7{phone_digits[1:]}"
+    elif phone.startswith("+"):
+        # International format
+        if len(phone_digits) < 10:
+            await message.answer(
+                "Номер слишком короткий. Укажи полный номер с кодом страны"
+            )
+            return
+        normalized_phone = phone
+    else:
         await message.answer(
-            "Пожалуйста, введите корректный номер телефона.\n"
-            "Формат: +79001234567"
+            "Укажи номер в формате +7... или 8...\n"
+            "Например: +79001234567 или 89001234567"
         )
         return
 
-    await state.update_data(phone=phone)
+    await state.update_data(phone=normalized_phone)
 
     skip_msg = await message.answer(
-        "<b>Укажите ваш email</b>\n"
-        "(или нажмите кнопку ниже, чтобы пропустить)",
+        "<b>Укажи свой email</b> 📧\n"
+        "(необязательно — можешь пропустить)",
         reply_markup=get_skip_button()
     )
     await state.update_data(email_skip_message_id=skip_msg.message_id)
     await state.set_state(ResumeCreationStates.email)
 
 
+# ============ EMAIL ============
+
 @router.message(ResumeCreationStates.email)
-@router.callback_query(ResumeCreationStates.email, F.data == "skip")
-async def process_email(message_or_callback, state: FSMContext):
-    """Process email."""
-    email = None
+async def process_email_text(message: Message, state: FSMContext):
+    """Process email text input."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
 
-    if isinstance(message_or_callback, CallbackQuery):
-        await message_or_callback.answer()
-        message = message_or_callback.message
-        # Удаляем кнопку "Пропустить"
-        try:
-            await message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-    else:
-        message = message_or_callback
-        if message.text == "🚫 Отменить создание":
-            await handle_cancel_resume(message, state)
-            return
-
-        # Удаляем инлайн-кнопку из предыдущего сообщения если пользователь ввел email
+    if message.text == "◀️ Назад":
+        # Remove skip button if exists
         data = await state.get_data()
         skip_message_id = data.get("email_skip_message_id")
         if skip_message_id:
@@ -340,98 +381,326 @@ async def process_email(message_or_callback, state: FSMContext):
             except Exception:
                 pass
 
-        email = message.text.strip()
-        if "@" not in email or "." not in email:
-            await message.answer("Пожалуйста, введите корректный email.")
-            return
-
-    if email:
-        await state.update_data(email=email)
-
-    # Переходим сразу к выбору должности
-    await message.answer(
-        "<b>Какую должность вы ищете?</b>\n\nВыберите категорию:",
-        reply_markup=get_position_categories_keyboard()
-    )
-    await state.set_state(ResumeCreationStates.position_category)
-
-
-# ============ POSITION AND SALARY ============
-
-@router.callback_query(ResumeCreationStates.position_category, F.data.startswith("position_cat:"))
-async def process_position_category(callback: CallbackQuery, state: FSMContext):
-    """Process position category."""
-    await callback.answer()
-
-    category = callback.data.split(":")[1]
-    await state.update_data(position_category=category)
-
-    # If OTHER category selected, go directly to custom position input
-    if category == "other":
-        await callback.message.edit_text(
-            "<b>Введите название должности, которую вы ищете:</b>"
+        await message.answer(
+            "<b>Укажи свой номер телефона</b> 📱\n"
+            "Можно в формате +7... или 8...",
+            reply_markup=get_back_cancel_keyboard()
         )
-        await state.set_state(ResumeCreationStates.position_custom)
+        await state.set_state(ResumeCreationStates.phone)
         return
 
-    # Удаляем старые кнопки и показываем новые
-    await callback.message.edit_text(
-        "<b>Выберите конкретную должность:</b>",
-        reply_markup=get_positions_keyboard(category)
-    )
-    await state.set_state(ResumeCreationStates.position)
+    # Remove skip button
+    data = await state.get_data()
+    skip_message_id = data.get("email_skip_message_id")
+    if skip_message_id:
+        try:
+            await message.bot.edit_message_reply_markup(
+                chat_id=message.chat.id,
+                message_id=skip_message_id,
+                reply_markup=None
+            )
+        except Exception:
+            pass
 
-
-@router.callback_query(ResumeCreationStates.position, F.data == "back_to_categories")
-async def back_to_position_categories(callback: CallbackQuery, state: FSMContext):
-    """Go back to position categories."""
-    await callback.answer()
-
-    await callback.message.edit_text(
-        "<b>Какую должность вы ищете?</b>\n\nВыберите категорию:",
-        reply_markup=get_position_categories_keyboard()
-    )
-    await state.set_state(ResumeCreationStates.position_category)
-
-
-@router.callback_query(ResumeCreationStates.position, F.data.startswith("position:"))
-async def process_position(callback: CallbackQuery, state: FSMContext):
-    """Process position selection."""
-    await callback.answer()
-
-    # Extract position from callback data
-    # Format: "position:position_name"
-    parts = callback.data.split(":", 1)
-    if len(parts) < 2:
-        await callback.answer("Ошибка выбора должности", show_alert=True)
+    email = message.text.strip()
+    if "@" not in email or "." not in email:
+        await message.answer("Это не похоже на email. Попробуй ещё раз или пропусти")
         return
 
-    position = parts[1]
+    await state.update_data(email=email)
+    await _proceed_to_telegram_confirm(message, state)
 
-    # Удаляем кнопки выбора должности
+
+@router.callback_query(ResumeCreationStates.email, F.data == "skip")
+async def skip_email(callback: CallbackQuery, state: FSMContext):
+    """Skip email via inline button."""
+    await callback.answer()
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
 
-    if position == "custom":
-        await state.set_state(ResumeCreationStates.position_custom)
-        await callback.message.answer(
-            "Напишите должность, которую хотите указать:",
-            reply_markup=get_back_cancel_keyboard()
+    await state.update_data(email=None)
+    await _proceed_to_telegram_confirm(callback.message, state, from_callback=True)
+
+
+async def _proceed_to_telegram_confirm(message: Message, state: FSMContext, from_callback: bool = False):
+    """Proceed to telegram confirmation step."""
+    # Get user's telegram username
+    data = await state.get_data()
+
+    # Try to get from message.from_user if available
+    if hasattr(message, 'from_user') and message.from_user:
+        username = message.from_user.username
+    else:
+        username = None
+
+    if username:
+        await state.update_data(detected_telegram=f"@{username}")
+        await message.answer(
+            f"Твой Telegram: <b>@{username}</b>\n\n"
+            "Это правильно?",
+            reply_markup=get_confirm_telegram_keyboard()
         )
+        await state.set_state(ResumeCreationStates.telegram_confirm)
+    else:
+        # No username detected, skip to manual input or position
+        await message.answer(
+            "<b>Укажи свой Telegram для связи</b>\n"
+            "Например: @username\n"
+            "(можно пропустить)",
+            reply_markup=get_skip_button()
+        )
+        await state.set_state(ResumeCreationStates.telegram)
+
+
+# ============ TELEGRAM ============
+
+@router.callback_query(ResumeCreationStates.telegram_confirm, F.data == "telegram:confirm")
+async def confirm_telegram(callback: CallbackQuery, state: FSMContext):
+    """Confirm detected telegram."""
+    await callback.answer()
+    data = await state.get_data()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Keep detected telegram and proceed
+    await _proceed_to_position_selection(callback.message, state)
+
+
+@router.callback_query(ResumeCreationStates.telegram_confirm, F.data == "telegram:change")
+async def change_telegram(callback: CallbackQuery, state: FSMContext):
+    """User wants to change telegram."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await callback.message.answer(
+        "<b>Укажи другой Telegram для связи:</b>\n"
+        "Например: @username",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.telegram)
+
+
+@router.callback_query(ResumeCreationStates.telegram_confirm, F.data == "telegram:skip")
+async def skip_telegram_confirm(callback: CallbackQuery, state: FSMContext):
+    """Skip telegram (don't use detected one)."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await state.update_data(detected_telegram=None)
+    await _proceed_to_position_selection(callback.message, state)
+
+
+@router.message(ResumeCreationStates.telegram)
+async def process_telegram(message: Message, state: FSMContext):
+    """Process telegram username input."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
         return
 
-    await state.update_data(desired_position=position)
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Укажи свой email</b> 📧\n"
+            "(необязательно — можешь пропустить)",
+            reply_markup=get_skip_button()
+        )
+        await state.set_state(ResumeCreationStates.email)
+        return
 
-    skip_msg = await callback.message.answer(
-        "<b>Есть ли у выбранной должности специализация?</b>\n"
-        "Например: Банкетный менеджер, Старший официант.\n"
-        "Если специализации нет, нажмите 'Пропустить'.",
-        reply_markup=get_skip_inline_button()
+    telegram = message.text.strip()
+
+    # Normalize telegram username
+    if not telegram.startswith("@"):
+        telegram = f"@{telegram}"
+
+    await state.update_data(detected_telegram=telegram)
+    await _proceed_to_position_selection(message, state)
+
+
+@router.callback_query(ResumeCreationStates.telegram, F.data == "skip")
+async def skip_telegram(callback: CallbackQuery, state: FSMContext):
+    """Skip telegram via inline button."""
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await state.update_data(detected_telegram=None)
+    await _proceed_to_position_selection(callback.message, state)
+
+
+async def _proceed_to_position_selection(message: Message, state: FSMContext):
+    """Proceed to position category selection."""
+    # Initialize multi-position data
+    await state.update_data(
+        selected_positions=[],
+        selected_categories=[],
+        current_category=None,
+        current_category_positions=[]
     )
-    await state.update_data(skip_message_id=skip_msg.message_id)
-    await state.set_state(ResumeCreationStates.specialization)
+
+    await message.answer(
+        "<b>На какую должность ты претендуешь?</b> 💼\n\n"
+        "Выбери категорию — потом сможешь добавить ещё:",
+        reply_markup=get_position_categories_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.position_category)
+
+
+# ============ MULTI-POSITION SELECTION ============
+
+@router.callback_query(ResumeCreationStates.position_category, F.data.startswith("position_cat:"))
+async def process_position_category(callback: CallbackQuery, state: FSMContext):
+    """Process position category selection."""
+    await callback.answer()
+
+    category = callback.data.split(":")[1]
+    await state.update_data(current_category=category, current_category_positions=[])
+
+    # If OTHER category selected, go directly to custom position input
+    if category == "other":
+        await callback.message.edit_text(
+            "<b>Напиши название должности:</b>"
+        )
+        await state.set_state(ResumeCreationStates.position_custom)
+        return
+
+    # Get positions for this category
+    positions = get_positions_for_category(category)
+
+    if not positions:
+        # No predefined positions, go to custom input
+        await callback.message.edit_text(
+            "<b>Напиши название должности:</b>"
+        )
+        await state.set_state(ResumeCreationStates.position_custom)
+        return
+
+    # Show multi-select keyboard for positions
+    await callback.message.edit_text(
+        "<b>Выбери должности в этой категории:</b>\n"
+        "(можно выбрать несколько)",
+        reply_markup=get_multi_position_keyboard(category, [])
+    )
+    await state.set_state(ResumeCreationStates.positions_in_category)
+
+
+@router.callback_query(ResumeCreationStates.positions_in_category, F.data.startswith("pos_toggle:"))
+async def toggle_position_in_category(callback: CallbackQuery, state: FSMContext):
+    """Toggle position selection within category."""
+    await callback.answer()
+
+    data = await state.get_data()
+    category = data.get("current_category")
+    current_positions = data.get("current_category_positions", [])
+
+    # Get position by index
+    idx = int(callback.data.split(":")[1])
+    positions = get_positions_for_category(category)
+
+    if idx >= len(positions):
+        await callback.answer("Ошибка выбора", show_alert=True)
+        return
+
+    position = positions[idx]
+
+    # Toggle
+    if position in current_positions:
+        current_positions.remove(position)
+    else:
+        current_positions.append(position)
+
+    await state.update_data(current_category_positions=current_positions)
+
+    # Update keyboard
+    await callback.message.edit_reply_markup(
+        reply_markup=get_multi_position_keyboard(category, current_positions)
+    )
+
+
+@router.callback_query(ResumeCreationStates.positions_in_category, F.data == "pos_custom")
+async def position_custom_in_category(callback: CallbackQuery, state: FSMContext):
+    """User wants to add custom position."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await callback.message.answer(
+        "<b>Напиши название должности:</b>",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.position_custom)
+
+
+@router.callback_query(ResumeCreationStates.positions_in_category, F.data == "pos_category_done")
+async def position_category_done(callback: CallbackQuery, state: FSMContext):
+    """Finish selecting positions in current category."""
+    await callback.answer()
+
+    data = await state.get_data()
+    category = data.get("current_category")
+    current_positions = data.get("current_category_positions", [])
+
+    # Add to global selection
+    all_positions = data.get("selected_positions", [])
+    all_categories = data.get("selected_categories", [])
+
+    for pos in current_positions:
+        if pos not in all_positions:
+            all_positions.append(pos)
+
+    if category not in all_categories:
+        all_categories.append(category)
+
+    await state.update_data(
+        selected_positions=all_positions,
+        selected_categories=all_categories,
+        current_category_positions=[]
+    )
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    # Show summary and ask about more categories
+    positions_text = ", ".join(all_positions) if all_positions else "Не выбрано"
+
+    await callback.message.answer(
+        f"<b>Выбранные должности:</b>\n{positions_text}\n\n"
+        "Хочешь добавить должности из другой категории?",
+        reply_markup=get_position_summary_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.position_more_categories)
+
+
+@router.callback_query(ResumeCreationStates.positions_in_category, F.data == "back_to_categories")
+async def back_to_categories_from_positions(callback: CallbackQuery, state: FSMContext):
+    """Go back to category selection."""
+    await callback.answer()
+
+    await callback.message.edit_text(
+        "<b>На какую должность ты претендуешь?</b> 💼\n\n"
+        "Выбери категорию:",
+        reply_markup=get_position_categories_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.position_category)
 
 
 @router.message(ResumeCreationStates.position_custom)
@@ -445,130 +714,118 @@ async def process_custom_position(message: Message, state: FSMContext):
 
     if text == "◀️ Назад":
         data = await state.get_data()
-        category = data.get("position_category")
-        await message.answer(
-            "<b>Выберите конкретную должность:</b>",
-            reply_markup=get_positions_keyboard(category)
-        )
-        await state.set_state(ResumeCreationStates.position)
+        category = data.get("current_category")
+
+        if category and category != "other":
+            current_positions = data.get("current_category_positions", [])
+            await message.answer(
+                "<b>Выбери должности в этой категории:</b>\n"
+                "(можно выбрать несколько)",
+                reply_markup=get_multi_position_keyboard(category, current_positions)
+            )
+            await state.set_state(ResumeCreationStates.positions_in_category)
+        else:
+            await message.answer(
+                "<b>На какую должность ты претендуешь?</b> 💼\n\n"
+                "Выбери категорию:",
+                reply_markup=get_position_categories_keyboard()
+            )
+            await state.set_state(ResumeCreationStates.position_category)
         return
 
     if len(text) < 2:
-        await message.answer("Пожалуйста, укажите название должности.")
+        await message.answer("Название должности слишком короткое")
         return
 
-    await state.update_data(desired_position=text)
+    # Add custom position to selection
+    data = await state.get_data()
+    all_positions = data.get("selected_positions", [])
+    all_categories = data.get("selected_categories", [])
+    category = data.get("current_category", "other")
 
-    skip_msg = await message.answer(
-        "<b>Есть ли у выбранной должности специализация?</b>\n"
-        "Например: Банкетный менеджер, Старший официант.\n"
-        "Если специализации нет, нажмите 'Пропустить'.",
-        reply_markup=get_skip_inline_button()
+    if text not in all_positions:
+        all_positions.append(text)
+
+    if category not in all_categories:
+        all_categories.append(category)
+
+    await state.update_data(
+        selected_positions=all_positions,
+        selected_categories=all_categories
     )
-    await state.update_data(skip_message_id=skip_msg.message_id)
-    await state.set_state(ResumeCreationStates.specialization)
+
+    # Show summary
+    positions_text = ", ".join(all_positions)
+
+    await message.answer(
+        f"<b>Выбранные должности:</b>\n{positions_text}\n\n"
+        "Хочешь добавить должности из другой категории?",
+        reply_markup=get_position_summary_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.position_more_categories)
 
 
-@router.callback_query(ResumeCreationStates.specialization, F.data == "skip_field")
-async def skip_specialization(callback: CallbackQuery, state: FSMContext):
-    """Skip specialization via inline button."""
+# ============ MORE CATEGORIES / CONFIRM ============
+
+@router.callback_query(ResumeCreationStates.position_more_categories, F.data == "add_more_category")
+async def add_more_position_category(callback: CallbackQuery, state: FSMContext):
+    """User wants to add more positions from another category."""
     await callback.answer()
-    # Удаляем инлайн-кнопку
+
+    await callback.message.edit_text(
+        "<b>Выбери ещё одну категорию:</b>",
+        reply_markup=get_position_categories_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.position_category)
+
+
+@router.callback_query(ResumeCreationStates.position_more_categories, F.data == "positions_confirmed")
+async def positions_confirmed(callback: CallbackQuery, state: FSMContext):
+    """User confirmed all selected positions."""
+    await callback.answer()
+
+    data = await state.get_data()
+    all_positions = data.get("selected_positions", [])
+    all_categories = data.get("selected_categories", [])
+
+    if not all_positions:
+        await callback.answer("Выбери хотя бы одну должность!", show_alert=True)
+        return
+
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    
-    await state.update_data(specialization=None)
-    data = await state.get_data()
-    category = data.get("position_category")
-    
-    if category == "cook":
+
+    # Save to state with new field names
+    await state.update_data(
+        desired_positions=all_positions,
+        position_categories=all_categories,
+        # Also set first position for backward compatibility
+        desired_position=all_positions[0] if all_positions else None,
+        position_category=all_categories[0] if all_categories else None
+    )
+
+    # Check if cook category is selected - ask about cuisines
+    if "cook" in all_categories:
         await callback.message.answer(
-            "<b>Выберите типы кухонь, с которыми работаете:</b>\n"
+            "<b>С какими кухнями ты работаешь?</b> 🍳\n"
             "(можно выбрать несколько)",
-            reply_markup=get_cuisines_keyboard(data.get("cuisines", []))
+            reply_markup=get_cuisines_keyboard([])
         )
         await state.set_state(ResumeCreationStates.cuisines)
     else:
+        # Skip cuisines, go to salary
         await callback.message.answer(
-            "<b>Какую зарплату вы хотите получать?</b>\n"
-            "Укажите сумму в рублях (например: 80000)\n"
-            "Или нажмите кнопку ниже, чтобы пропустить",
+            "<b>Какую зарплату хочешь получать?</b> 💰\n"
+            "Укажи сумму в рублях (например: 80000)\n"
+            "Или пропусти, если зарплата по договорённости",
             reply_markup=get_skip_button()
         )
         await state.set_state(ResumeCreationStates.desired_salary)
 
 
-@router.message(ResumeCreationStates.specialization)
-async def process_specialization(message: Message, state: FSMContext):
-    """Process optional specialization details."""
-    # Удаляем инлайн-кнопку "Пропустить" если она была
-    data = await state.get_data()
-    skip_message_id = data.get("skip_message_id")
-    if skip_message_id:
-        try:
-            await message.bot.edit_message_reply_markup(
-                chat_id=message.chat.id,
-                message_id=skip_message_id,
-                reply_markup=None
-            )
-        except Exception:
-            pass
-        await state.update_data(skip_message_id=None)
-    
-    text = (message.text or "").strip()
-
-    if text == "🚫 Отменить создание":
-        await handle_cancel_resume(message, state)
-        return
-
-    if text == "◀️ Назад":
-        # Удаляем инлайн-кнопку если была
-        skip_message_id = data.get("skip_message_id")
-        if skip_message_id:
-            try:
-                await message.bot.edit_message_reply_markup(
-                    chat_id=message.chat.id,
-                    message_id=skip_message_id,
-                    reply_markup=None
-                )
-            except Exception:
-                pass
-            await state.update_data(skip_message_id=None)
-        
-        category = data.get("position_category")
-        await message.answer(
-            "<b>Выберите конкретную должность:</b>",
-            reply_markup=get_positions_keyboard(category)
-        )
-        await state.set_state(ResumeCreationStates.position)
-        return
-
-    if text.lower() != "пропустить" and text:
-        await state.update_data(specialization=text)
-    else:
-        await state.update_data(specialization=None)
-
-    data = await state.get_data()
-    category = data.get("position_category")
-
-    if category == "cook":
-        await message.answer(
-            "<b>Выберите типы кухонь, с которыми работаете:</b>\n"
-            "(можно выбрать несколько)",
-            reply_markup=get_cuisines_keyboard(data.get("cuisines", []))
-        )
-        await state.set_state(ResumeCreationStates.cuisines)
-    else:
-        await message.answer(
-            "<b>Какую зарплату вы хотите получать?</b>\n"
-            "Укажите сумму в рублях (например: 80000)\n"
-            "Или нажмите кнопку ниже, чтобы пропустить",
-            reply_markup=get_skip_button()
-        )
-        await state.set_state(ResumeCreationStates.desired_salary)
-
+# ============ CUISINES ============
 
 @router.callback_query(ResumeCreationStates.cuisines, F.data.startswith("cuisine:"))
 async def process_cuisines(callback: CallbackQuery, state: FSMContext):
@@ -580,37 +837,35 @@ async def process_cuisines(callback: CallbackQuery, state: FSMContext):
 
     # Handle "Done" button
     if callback.data == "cuisine:done":
-        # Удаляем кнопки выбора кухонь
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
 
-        skip_msg = await callback.message.answer(
-            f"Выбрано кухонь: {len(cuisines)}\n\n"
-            "<b>Какую зарплату вы хотите получать?</b>\n"
-            "Укажите сумму в рублях (например: 80000)\n"
-            "Или нажмите кнопку ниже, чтобы пропустить",
+        cuisines_text = ", ".join(cuisines) if cuisines else "Не выбрано"
+
+        await callback.message.answer(
+            f"🍳 Кухни: {cuisines_text}\n\n"
+            "<b>Какую зарплату хочешь получать?</b> 💰\n"
+            "Укажи сумму в рублях (например: 80000)\n"
+            "Или пропусти, если зарплата по договорённости",
             reply_markup=get_skip_button()
         )
-        await state.update_data(salary_skip_message_id=skip_msg.message_id)
         await state.set_state(ResumeCreationStates.desired_salary)
         return
 
     # Handle "Back" button
     if callback.data == "cuisine:back":
-        # Возвращаемся к выбору должности - редактируем существующее сообщение
         category = data.get("position_category")
         await callback.message.edit_text(
             "<b>Выберите конкретную должность:</b>",
-            reply_markup=get_positions_keyboard(category)
+            reply_markup=get_multi_position_keyboard(category, data.get("current_category_positions", []))
         )
-        await state.set_state(ResumeCreationStates.position)
+        await state.set_state(ResumeCreationStates.positions_in_category)
         return
 
     # Handle "Custom cuisine" button
     if callback.data == "cuisine:custom":
-        # Удаляем кнопки
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
@@ -624,14 +879,15 @@ async def process_cuisines(callback: CallbackQuery, state: FSMContext):
         return
 
     # Toggle cuisine - callback_data format: cuisine:{idx}
-    from shared.constants import get_cuisine_by_index
     idx = int(callback.data.split(":", 1)[1])
-    cuisine = get_cuisine_by_index(idx)
 
-    if not cuisine:
-        await callback.answer("Ошибка выбора кухни", show_alert=True)
+    if idx >= len(CUISINES):
+        await callback.answer("Ошибка выбора", show_alert=True)
         return
 
+    cuisine = CUISINES[idx]
+
+    # Toggle
     if cuisine in cuisines:
         cuisines.remove(cuisine)
     else:
@@ -686,3 +942,159 @@ async def process_custom_cuisine(message: Message, state: FSMContext):
         reply_markup=get_cuisines_keyboard(cuisines)
     )
     await state.set_state(ResumeCreationStates.cuisines)
+
+
+@router.callback_query(ResumeCreationStates.cuisines, F.data == "cuisines_done")
+async def cuisines_done(callback: CallbackQuery, state: FSMContext):
+    """Finish cuisine selection."""
+    await callback.answer()
+
+    data = await state.get_data()
+    cuisines = data.get("cuisines", [])
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    cuisines_text = ", ".join(cuisines) if cuisines else "Не выбрано"
+
+    await callback.message.answer(
+        f"🍳 Кухни: {cuisines_text}\n\n"
+        "<b>Какую зарплату хочешь получать?</b> 💰\n"
+        "Укажи сумму в рублях (например: 80000)\n"
+        "Или пропусти, если зарплата по договорённости",
+        reply_markup=get_skip_button()
+    )
+    await state.set_state(ResumeCreationStates.desired_salary)
+
+
+# ============ SALARY ============
+
+@router.message(ResumeCreationStates.desired_salary)
+async def process_desired_salary(message: Message, state: FSMContext):
+    """Process desired salary."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        # Check if we need to go back to cuisines or positions
+        data = await state.get_data()
+        if "cook" in data.get("position_categories", []):
+            await message.answer(
+                "<b>С какими кухнями ты работаешь?</b> 🍳\n"
+                "(можно выбрать несколько)",
+                reply_markup=get_cuisines_keyboard(data.get("cuisines", []))
+            )
+            await state.set_state(ResumeCreationStates.cuisines)
+        else:
+            # Go back to position confirmation
+            all_positions = data.get("selected_positions", [])
+            positions_text = ", ".join(all_positions) if all_positions else "Не выбрано"
+            await message.answer(
+                f"<b>Выбранные должности:</b>\n{positions_text}\n\n"
+                "Хочешь добавить должности из другой категории?",
+                reply_markup=get_position_summary_keyboard()
+            )
+            await state.set_state(ResumeCreationStates.position_more_categories)
+        return
+
+    # Try to parse salary
+    salary_text = message.text.strip().replace(" ", "").replace("₽", "").replace("руб", "")
+
+    try:
+        salary = int(salary_text)
+        if salary < 0:
+            raise ValueError("Negative salary")
+        if salary > 10000000:
+            await message.answer("Это слишком большая сумма. Укажи реальную зарплату")
+            return
+    except ValueError:
+        await message.answer(
+            "Введи число без пробелов и букв\n"
+            "Например: 80000"
+        )
+        return
+
+    await state.update_data(desired_salary=salary)
+
+    # Proceed to work schedule
+    from bot.keyboards.positions import get_work_schedule_keyboard
+
+    await message.answer(
+        f"💰 Желаемая зарплата: {salary:,} ₽".replace(",", " ") + "\n\n"
+        "<b>Какой график работы тебе подходит?</b>\n"
+        "(можно выбрать несколько)",
+        reply_markup=get_work_schedule_keyboard([])
+    )
+    await state.set_state(ResumeCreationStates.work_schedule)
+
+
+@router.callback_query(ResumeCreationStates.desired_salary, F.data == "skip")
+async def skip_salary(callback: CallbackQuery, state: FSMContext):
+    """Skip salary via inline button."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await state.update_data(desired_salary=None)
+
+    from bot.keyboards.positions import get_work_schedule_keyboard
+
+    await callback.message.answer(
+        "<b>Какой график работы тебе подходит?</b>\n"
+        "(можно выбрать несколько)",
+        reply_markup=get_work_schedule_keyboard([])
+    )
+    await state.set_state(ResumeCreationStates.work_schedule)
+
+
+# ============ WORK SCHEDULE ============
+
+@router.callback_query(ResumeCreationStates.work_schedule, F.data.startswith("schedule:"))
+async def process_work_schedule(callback: CallbackQuery, state: FSMContext):
+    """Process work schedule selection."""
+    await callback.answer()
+
+    action = callback.data.split(":")[1]
+
+    if action == "done":
+        # Finish schedule selection
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        # Proceed to experience (in resume_completion.py)
+        await callback.message.answer(
+            "Отлично! Основная информация заполнена ✅\n\n"
+            "Теперь давай добавим информацию об опыте работы.\n\n"
+            "<b>Есть ли у тебя опыт работы?</b>",
+            reply_markup=get_yes_no_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.add_work_experience)
+        return
+
+    if action == "toggle":
+        # Toggle schedule
+        from shared.constants import WORK_SCHEDULES
+        from bot.keyboards.positions import get_work_schedule_keyboard
+
+        schedule = callback.data.split(":", 2)[2]
+        data = await state.get_data()
+        selected = data.get("work_schedule", [])
+
+        if schedule in selected:
+            selected.remove(schedule)
+        else:
+            selected.append(schedule)
+
+        await state.update_data(work_schedule=selected)
+
+        await callback.message.edit_reply_markup(
+            reply_markup=get_work_schedule_keyboard(selected)
+        )

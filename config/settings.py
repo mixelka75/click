@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     # Telegram Bot
     bot_token: str = Field(..., description="Telegram bot token")
     admin_ids: str = Field(default="", description="Comma-separated admin IDs")
+    moderation_chat_id: Optional[int] = Field(default=None, description="Telegram group ID for moderation")
 
     # MongoDB
     mongodb_url: str = Field(default="mongodb://localhost:27017", description="MongoDB connection URL")

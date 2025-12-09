@@ -16,6 +16,7 @@ from .response import Response
 from .publication import Publication, PublicationType, Analytics
 from .favorite import Favorite
 from .chat import Chat, Message
+from .complaint import Complaint, ReporterBan, ComplaintStats
 
 __all__ = [
     # User models
@@ -41,6 +42,10 @@ __all__ = [
     # Chat models
     "Chat",
     "Message",
+    # Complaint models
+    "Complaint",
+    "ReporterBan",
+    "ComplaintStats",
 ]
 
 
@@ -55,4 +60,7 @@ DOCUMENT_MODELS = [
     Analytics,
     Favorite,
     Chat,
+    Complaint,
+    ReporterBan,
+    ComplaintStats,
 ]

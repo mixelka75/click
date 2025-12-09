@@ -1,11 +1,14 @@
 """
-Vacancy creation handlers - Part 1: Position, Company, Location, Contact.
+Vacancy creation handlers - Part 1: Position, Company, Location.
+Updated: Formal "вы" style, metro instead of address, city buttons.
 """
 
 from aiogram import Router, F
 from bot.filters import IsNotMenuButton
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from loguru import logger
 
 from bot.states.vacancy_states import VacancyCreationStates
 from bot.keyboards.positions import (
@@ -13,10 +16,11 @@ from bot.keyboards.positions import (
     get_positions_keyboard,
     get_cuisines_keyboard
 )
+from bot.keyboards.common import get_cancel_keyboard
+from backend.models import User
+from shared.constants import UserRole, PRESET_CITIES
 
 router = Router()
-# Apply filter to ALL handlers in this router - don't process menu buttons
-# Note: Start handler moved to vacancy_handlers.py where menu button handlers belong
 router.message.filter(IsNotMenuButton())
 
 
@@ -27,6 +31,8 @@ def get_back_to_categories_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+# ============ POSITION SELECTION ============
+
 @router.callback_query(VacancyCreationStates.position_category, F.data.startswith("position_cat:"))
 async def process_position_category(callback: CallbackQuery, state: FSMContext):
     """Process position category selection."""
@@ -35,7 +41,6 @@ async def process_position_category(callback: CallbackQuery, state: FSMContext):
     category = callback.data.split(":")[1]
     await state.update_data(position_category=category)
 
-    # If OTHER category selected, go directly to custom position input
     if category == "other":
         await callback.message.edit_text(
             "<b>Введите название должности:</b>",
@@ -58,7 +63,6 @@ async def process_position(callback: CallbackQuery, state: FSMContext):
 
     position = callback.data.split(":", 1)[1]
 
-    # Handle custom position input
     if position == "custom":
         await callback.message.edit_text(
             "<b>Введите название должности:</b>",
@@ -72,20 +76,18 @@ async def process_position(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     category = data.get("position_category")
 
-    # For cooks, ask about cuisines
     if category == "cook":
         await callback.message.edit_text(
-            "<b>Выберите типы кухонь, с которыми должен работать повар:</b>\n"
+            "<b>Выберите типы кухонь:</b>\n"
             "(можно выбрать несколько)",
             reply_markup=get_cuisines_keyboard()
         )
         await state.set_state(VacancyCreationStates.cuisines)
     else:
-        # Skip to company name
         await callback.message.edit_text(
             f"✅ Должность: <b>{position}</b>\n\n"
-            "Отлично! Теперь расскажите о компании.\n\n"
-            "<b>Введите название вашей компании:</b>"
+            "Теперь расскажите о вашей компании.\n\n"
+            "<b>Введите название компании:</b>"
         )
         await state.set_state(VacancyCreationStates.company_name)
 
@@ -98,6 +100,17 @@ async def back_from_custom_to_categories(callback: CallbackQuery, state: FSMCont
     data = await state.get_data()
     if data.get("position"):
         await state.update_data(position=None)
+    await callback.message.edit_text(
+        "<b>Выберите категорию должности:</b>",
+        reply_markup=get_position_categories_keyboard()
+    )
+    await state.set_state(VacancyCreationStates.position_category)
+
+
+@router.callback_query(VacancyCreationStates.position, F.data == "back_to_categories")
+async def back_to_categories(callback: CallbackQuery, state: FSMContext):
+    """Go back to category selection."""
+    await callback.answer()
     await callback.message.edit_text(
         "<b>Выберите категорию должности:</b>",
         reply_markup=get_position_categories_keyboard()
@@ -123,25 +136,25 @@ async def process_custom_position(message: Message, state: FSMContext):
     data = await state.get_data()
     category = data.get("position_category")
 
-    # For cooks, ask about cuisines
     if category == "cook":
         await message.answer(
             f"✅ Должность: <b>{position}</b>\n\n"
-            "<b>Выберите типы кухонь, с которыми должен работать повар:</b>\n"
+            "<b>Выберите типы кухонь:</b>\n"
             "(можно выбрать несколько)",
             reply_markup=get_cuisines_keyboard()
         )
         await state.set_state(VacancyCreationStates.cuisines)
     else:
-        # Skip to company name
         await message.answer(
             f"✅ Должность: <b>{position}</b>\n\n"
-            "Отлично! Теперь расскажите о компании.\n\n"
-            "<b>Введите название вашей компании:</b>"
+            "Теперь расскажите о вашей компании.\n\n"
+            "<b>Введите название компании:</b>"
         )
 
         await state.set_state(VacancyCreationStates.company_name)
 
+
+# ============ CUISINES ============
 
 @router.callback_query(VacancyCreationStates.cuisines, F.data.startswith("cuisine:"))
 async def process_cuisine_toggle(callback: CallbackQuery, state: FSMContext):
@@ -209,8 +222,6 @@ async def process_cuisine_toggle(callback: CallbackQuery, state: FSMContext):
         cuisines.append(cuisine)
 
     await state.update_data(cuisines=cuisines)
-
-    # Update keyboard to reflect selection
     await callback.message.edit_reply_markup(
         reply_markup=get_cuisines_keyboard(selected_cuisines=cuisines)
     )
@@ -259,16 +270,17 @@ async def process_cuisines_done(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Выберите хотя бы один тип кухни", show_alert=True)
         return
 
-    # Удаляем кнопки выбора кухонь
     cuisines_text = ", ".join(cuisines)
     await callback.message.edit_text(
         f"✅ Типы кухонь: <b>{cuisines_text}</b>\n\n"
-        "Теперь расскажите о компании.\n\n"
-        "<b>Введите название вашей компании:</b>",
+        "Теперь расскажите о вашей компании.\n\n"
+        "<b>Введите название компании:</b>",
         reply_markup=None
     )
     await state.set_state(VacancyCreationStates.company_name)
 
+
+# ============ COMPANY INFO ============
 
 @router.message(VacancyCreationStates.company_name)
 async def process_company_name(message: Message, state: FSMContext):
@@ -278,7 +290,7 @@ async def process_company_name(message: Message, state: FSMContext):
     if len(company_name) < 2:
         await message.answer(
             "❌ Название компании слишком короткое.\n"
-            "Пожалуйста, введите корректное название:"
+            "Введите корректное название:"
         )
         return
 
@@ -292,32 +304,37 @@ async def process_company_name(message: Message, state: FSMContext):
     await state.set_state(VacancyCreationStates.company_type)
 
 
-def get_company_type_keyboard():
-    """Get company type selection keyboard."""
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+def get_company_type_keyboard() -> InlineKeyboardMarkup:
+    """Get company type selection keyboard with all types."""
+    builder = InlineKeyboardBuilder()
 
     types = [
-        ("Ресторан", "restaurant"),
-        ("Кафе", "cafe"),
-        ("Бар", "bar"),
-        ("Кофейня", "coffee_shop"),
-        ("Пекарня", "bakery"),
-        ("Кондитерская", "confectionery"),
-        ("Фастфуд", "fast_food"),
-        ("Столовая", "canteen"),
-        ("Кейтеринг", "catering"),
-        ("Гостиница", "hotel"),
-        ("Пиццерия", "pizzeria"),
-        ("Суши-бар", "sushi_bar"),
-        ("Другое", "other")
+        ("🍽 Ресторан", "restaurant"),
+        ("☕ Кафе", "cafe"),
+        ("🍸 Бар", "bar"),
+        ("☕ Кофейня", "coffee_shop"),
+        ("🥐 Пекарня", "bakery"),
+        ("🧁 Кондитерская", "confectionery"),
+        ("🍔 Фастфуд", "fast_food"),
+        ("🍲 Столовая", "canteen"),
+        ("🎉 Кейтеринг", "catering"),
+        ("🏨 Гостиница/Отель", "hotel"),
+        ("🍕 Пиццерия", "pizzeria"),
+        ("🍣 Суши-бар", "sushi_bar"),
+        ("🎤 Караоке", "karaoke"),
+        ("💨 Кальянная", "hookah_lounge"),
+        ("🎵 Клуб", "club"),
+        ("📍 Другое", "other"),
     ]
 
-    buttons = [
-        [InlineKeyboardButton(text=name, callback_data=f"company_type:{code}")]
-        for name, code in types
-    ]
+    for name, code in types:
+        builder.add(InlineKeyboardButton(
+            text=name,
+            callback_data=f"company_type:{code}"
+        ))
 
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    builder.adjust(2)
+    return builder.as_markup()
 
 
 @router.callback_query(VacancyCreationStates.company_type, F.data.startswith("company_type:"))
@@ -352,16 +369,16 @@ async def process_company_description(message: Message, state: FSMContext):
     await state.update_data(company_description=description)
 
     await message.answer(
-        "✅ Описание компании сохранено\n\n"
+        "✅ Описание сохранено\n\n"
         "<b>Выберите размер компании:</b>",
         reply_markup=get_company_size_keyboard()
     )
     await state.set_state(VacancyCreationStates.company_size)
 
 
-def get_company_size_keyboard():
+def get_company_size_keyboard() -> InlineKeyboardMarkup:
     """Get company size selection keyboard."""
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    builder = InlineKeyboardBuilder()
 
     sizes = [
         ("1-10 сотрудников", "1-10"),
@@ -371,12 +388,14 @@ def get_company_size_keyboard():
         ("500+ сотрудников", "500+")
     ]
 
-    buttons = [
-        [InlineKeyboardButton(text=name, callback_data=f"company_size:{code}")]
-        for name, code in sizes
-    ]
+    for name, code in sizes:
+        builder.add(InlineKeyboardButton(
+            text=name,
+            callback_data=f"company_size:{code}"
+        ))
 
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 @router.callback_query(VacancyCreationStates.company_size, F.data.startswith("company_size:"))
@@ -391,10 +410,29 @@ async def process_company_size(callback: CallbackQuery, state: FSMContext):
         "✅ Размер компании указан\n\n"
         "<b>Есть ли у компании сайт?</b>\n"
         "Если да, введите URL.\n"
-        "Если нет, введите '-' или 'нет':",
-        reply_markup=None
+        "Если нет, нажмите кнопку ниже:",
+        reply_markup=get_skip_keyboard("website")
     )
     await state.set_state(VacancyCreationStates.company_website)
+
+
+def get_skip_keyboard(field: str) -> InlineKeyboardMarkup:
+    """Get skip button keyboard."""
+    builder = InlineKeyboardBuilder()
+    builder.add(InlineKeyboardButton(
+        text="⏭ Пропустить",
+        callback_data=f"skip:{field}"
+    ))
+    return builder.as_markup()
+
+
+@router.callback_query(VacancyCreationStates.company_website, F.data == "skip:website")
+async def skip_company_website(callback: CallbackQuery, state: FSMContext):
+    """Skip company website."""
+    await callback.answer()
+    await state.update_data(company_website=None)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await ask_city(callback.message, state)
 
 
 @router.message(VacancyCreationStates.company_website)
@@ -402,114 +440,188 @@ async def process_company_website(message: Message, state: FSMContext):
     """Process company website."""
     website = message.text.strip()
 
-    if website.lower() not in ['-', 'нет', 'no']:
-        # Basic URL validation
+    if website.lower() not in ['-', 'нет', 'no', 'пропустить']:
         if not (website.startswith('http://') or website.startswith('https://')):
             website = 'https://' + website
         await state.update_data(company_website=website)
     else:
         await state.update_data(company_website=None)
 
+    await ask_city(message, state)
+
+
+# ============ LOCATION: CITY ============
+
+def get_city_selection_keyboard() -> InlineKeyboardMarkup:
+    """Get city selection keyboard with preset cities."""
+    builder = InlineKeyboardBuilder()
+
+    for city in PRESET_CITIES:
+        builder.add(InlineKeyboardButton(
+            text=city,
+            callback_data=f"vacancy_city:{city}"
+        ))
+
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(
+        text="📍 Другой город",
+        callback_data="vacancy_city:custom"
+    ))
+
+    return builder.as_markup()
+
+
+async def ask_city(message: Message, state: FSMContext):
+    """Ask for city selection."""
     await message.answer(
-        "✅ Сайт сохранён\n\n"
-        "Теперь укажите место работы.\n\n"
-        "<b>В каком городе находится ваше заведение?</b>"
+        "📍 <b>Местоположение</b>\n\n"
+        "В каком городе находится ваше заведение?",
+        reply_markup=get_city_selection_keyboard()
     )
     await state.set_state(VacancyCreationStates.city)
 
 
+@router.callback_query(VacancyCreationStates.city, F.data.startswith("vacancy_city:"))
+async def process_city_selection(callback: CallbackQuery, state: FSMContext):
+    """Process city selection from buttons."""
+    await callback.answer()
+
+    city = callback.data.split(":", 1)[1]
+
+    if city == "custom":
+        await callback.message.edit_text(
+            "📍 <b>Введите название города:</b>"
+        )
+        await state.set_state(VacancyCreationStates.city_custom)
+        return
+
+    await state.update_data(city=city)
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    # Check if city has metro
+    if city.lower() in ['москва', 'санкт-петербург']:
+        await ask_metro(callback.message, state, city)
+    else:
+        await finish_location(callback.message, state)
+
+
 @router.message(VacancyCreationStates.city)
-async def process_city(message: Message, state: FSMContext):
-    """Process city."""
+async def process_city_text(message: Message, state: FSMContext):
+    """Process city text input (fallback)."""
     city = message.text.strip()
 
     if len(city) < 2:
         await message.answer(
             "❌ Название города слишком короткое.\n"
-            "Пожалуйста, введите корректное название:"
+            "Введите корректное название:"
         )
         return
 
     await state.update_data(city=city)
 
-    await message.answer(
-        f"✅ Город: <b>{city}</b>\n\n"
-        "<b>Введите адрес заведения:</b>\n"
-        "(улица, дом)"
-    )
-    await state.set_state(VacancyCreationStates.address)
+    if city.lower() in ['москва', 'санкт-петербург', 'спб', 'питер', 'мск']:
+        actual_city = "Москва" if city.lower() in ['москва', 'мск'] else "Санкт-Петербург"
+        await state.update_data(city=actual_city)
+        await ask_metro(message, state, actual_city)
+    else:
+        await finish_location(message, state)
 
 
-@router.message(VacancyCreationStates.address)
-async def process_address(message: Message, state: FSMContext):
-    """Process address."""
-    address = message.text.strip()
+@router.message(VacancyCreationStates.city_custom)
+async def process_city_custom(message: Message, state: FSMContext):
+    """Process custom city input."""
+    city = message.text.strip()
 
-    if len(address) < 5:
+    if len(city) < 2:
         await message.answer(
-            "❌ Адрес слишком короткий.\n"
-            "Пожалуйста, введите полный адрес:"
+            "❌ Название города слишком короткое.\n"
+            "Введите корректное название:"
         )
         return
 
-    await state.update_data(address=address)
+    await state.update_data(city=city)
 
-    data = await state.get_data()
-    city = data.get("city", "")
-
-    # Only ask for metro if it's Moscow or SPb
-    if city.lower() in ['москва', 'moscow', 'санкт-петербург', 'петербург', 'спб', 'saint petersburg', 'st petersburg']:
-        await message.answer(
-            "✅ Адрес сохранён\n\n"
-            "<b>Укажите ближайшее метро:</b>\n"
-            "(или введите '-' если не применимо)"
-        )
-        await state.set_state(VacancyCreationStates.nearest_metro)
+    # Check if city has metro
+    if city.lower() in ['москва', 'санкт-петербург', 'спб', 'питер', 'мск']:
+        actual_city = "Москва" if city.lower() in ['москва', 'мск'] else "Санкт-Петербург"
+        await state.update_data(city=actual_city)
+        await ask_metro(message, state, actual_city)
     else:
-        await state.update_data(nearest_metro=None)
-        # Skip to salary (removed contact person collection)
-        await message.answer(
-            "✅ Адрес сохранён\n\n"
-            "Отлично! Базовая информация о вакансии готова.\n"
-            "Теперь перейдем к условиям работы и требованиям."
-        )
-        from bot.handlers.employer.vacancy_completion import ask_salary_min
-        await ask_salary_min(message, state)
+        await finish_location(message, state)
+
+
+# ============ LOCATION: METRO ============
+
+async def ask_metro(message: Message, state: FSMContext, city: str):
+    """Ask for metro stations."""
+    await message.answer(
+        f"🚇 <b>Станции метро</b>\n\n"
+        f"Город: {city}\n\n"
+        "Укажите ближайшие станции метро.\n"
+        "Можно ввести несколько через запятую.\n\n"
+        "Например: Тверская, Пушкинская",
+        reply_markup=get_skip_keyboard("metro")
+    )
+    await state.set_state(VacancyCreationStates.nearest_metro)
+
+
+@router.callback_query(VacancyCreationStates.nearest_metro, F.data == "skip:metro")
+async def skip_metro(callback: CallbackQuery, state: FSMContext):
+    """Skip metro stations."""
+    await callback.answer()
+    await state.update_data(metro_stations=[])
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await finish_location(callback.message, state)
 
 
 @router.message(VacancyCreationStates.nearest_metro)
-async def process_nearest_metro(message: Message, state: FSMContext):
-    """Process nearest metro."""
-    metro = message.text.strip()
+async def process_metro(message: Message, state: FSMContext):
+    """Process metro stations input."""
+    metro_text = message.text.strip()
 
-    if metro != '-':
-        await state.update_data(nearest_metro=metro)
+    if metro_text.lower() in ['-', 'нет', 'пропустить']:
+        await state.update_data(metro_stations=[])
     else:
-        await state.update_data(nearest_metro=None)
+        # Parse multiple stations
+        stations = [s.strip() for s in metro_text.split(',') if s.strip()]
+        await state.update_data(metro_stations=stations)
+        # For backward compatibility
+        await state.update_data(nearest_metro=stations[0] if stations else None)
+
+    await finish_location(message, state)
+
+
+async def finish_location(message: Message, state: FSMContext):
+    """Finish location section and move to salary."""
+    data = await state.get_data()
+    city = data.get("city", "")
+    metro_stations = data.get("metro_stations", [])
+
+    location_text = f"📍 Город: {city}"
+    if metro_stations:
+        location_text += f"\n🚇 Метро: {', '.join(metro_stations)}"
 
     await message.answer(
-        "✅ Метро указано\n\n"
+        f"✅ Местоположение сохранено\n{location_text}\n\n"
         "Отлично! Базовая информация о вакансии готова.\n"
-        "Теперь перейдем к условиям работы и требованиям."
+        "Теперь перейдём к условиям работы."
     )
 
-    # Import here to avoid circular imports
     from bot.handlers.employer.vacancy_completion import ask_salary_min
     await ask_salary_min(message, state)
 
 
-@router.callback_query(VacancyCreationStates.position, F.data == "back_to_categories")
-async def back_to_position_categories(callback: CallbackQuery, state: FSMContext):
-    """Return back to position category selection (employer flow)."""
-    await callback.answer()
-    # Показываем снова категории должностей
-    await callback.message.edit_text(
-        "<b>Выберите категорию должности:</b>",
-        reply_markup=get_position_categories_keyboard()
-    )
-    await state.set_state(VacancyCreationStates.position_category)
 
+# ============ CANCEL HANDLER ============
 
-
-
-
+@router.message(F.text == "🚫 Отменить создание")
+async def cancel_vacancy_creation(message: Message, state: FSMContext):
+    """Cancel vacancy creation."""
+    current_state = await state.get_state()
+    if current_state and current_state.startswith("VacancyCreation"):
+        await state.clear()
+        from bot.keyboards.common import get_main_menu_employer
+        await message.answer(
+            "❌ Создание вакансии отменено.",
+            reply_markup=get_main_menu_employer()
+        )

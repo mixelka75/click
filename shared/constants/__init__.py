@@ -54,6 +54,19 @@ from .common import (
     MAJOR_CITIES,
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
+    # Complaint system
+    ComplaintType,
+    ComplaintStatus,
+    ModerationAction,
+    VACANCY_COMPLAINT_REASONS,
+    RESUME_COMPLAINT_REASONS,
+    COMPLAINT_REASONS,
+    IGNORE_DURATIONS,
+    COMPLAINTS_FOR_AUTO_MODERATION,
+    COMPLAINTS_FOR_AUTO_HIDE,
+    DISMISSED_COMPLAINTS_FOR_BAN,
+    COMPLAINT_COOLDOWN_MINUTES,
+    MAX_COMPLAINTS_PER_DAY,
 )
 
 __all__ = [
@@ -103,4 +116,17 @@ __all__ = [
     "MAJOR_CITIES",
     "DEFAULT_PAGE_SIZE",
     "MAX_PAGE_SIZE",
+    # Complaint system
+    "ComplaintType",
+    "ComplaintStatus",
+    "ModerationAction",
+    "VACANCY_COMPLAINT_REASONS",
+    "RESUME_COMPLAINT_REASONS",
+    "COMPLAINT_REASONS",
+    "IGNORE_DURATIONS",
+    "COMPLAINTS_FOR_AUTO_MODERATION",
+    "COMPLAINTS_FOR_AUTO_HIDE",
+    "DISMISSED_COMPLAINTS_FOR_BAN",
+    "COMPLAINT_COOLDOWN_MINUTES",
+    "MAX_COMPLAINTS_PER_DAY",
 ]

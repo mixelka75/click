@@ -46,8 +46,9 @@ class VacancyCreationStates(StatesGroup):
 
     # Work location
     city = State()
-    address = State()
+    city_custom = State()  # For custom city input
     nearest_metro = State()
+    # address removed - using metro instead
 
     # Contact person
     contact_person_name = State()

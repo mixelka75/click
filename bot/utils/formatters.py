@@ -98,14 +98,19 @@ def format_resume_preview(data: dict) -> str:
         lines.append(f"📱 <b>Телефон:</b> {data['phone']}")
     if data.get("email"):
         lines.append(f"📧 <b>Email:</b> {data['email']}")
-    if data.get("telegram"):
+    if data.get("detected_telegram"):
+        lines.append(f"✈️ <b>Telegram:</b> {data['detected_telegram']}")
+    elif data.get("telegram"):
         lines.append(f"✈️ <b>Telegram:</b> {data['telegram']}")
     if data.get("other_contacts"):
         lines.append(f"🔗 <b>Доп. контакты:</b> {data['other_contacts']}")
 
-    # Position
-    lines.append(f"\n💼 <b>ЖЕЛАЕМАЯ ДОЛЖНОСТЬ</b>")
-    if data.get("desired_position"):
+    # Position - support multi-positions
+    lines.append(f"\n💼 <b>ЖЕЛАЕМЫЕ ДОЛЖНОСТИ</b>")
+    if data.get("desired_positions"):
+        positions_text = ", ".join(data["desired_positions"])
+        lines.append(f"<b>Должности:</b> {positions_text}")
+    elif data.get("desired_position"):
         lines.append(f"<b>Должность:</b> {data['desired_position']}")
 
     if data.get("cuisines"):
@@ -125,6 +130,8 @@ def format_resume_preview(data: dict) -> str:
         lines.append(f"\n💼 <b>ОПЫТ РАБОТЫ</b>")
         for i, exp in enumerate(data["work_experience"][:3], 1):  # Show first 3
             lines.append(f"\n<b>{i}. {exp.get('company', 'Компания')}</b>")
+            if exp.get('industry'):
+                lines.append(f"   Сфера: {exp['industry']}")
             lines.append(f"   Должность: {exp.get('position', '-')}")
             if exp.get('start_date') and exp.get('end_date'):
                 lines.append(f"   Период: {exp['start_date']} - {exp['end_date']}")
@@ -164,19 +171,6 @@ def format_resume_preview(data: dict) -> str:
             lines.append(f"• {course_line}")
         if len(data["courses"]) > 3:
             lines.append(f"• ... и ещё {len(data['courses']) - 3}")
-
-    # References
-    if data.get("references"):
-        lines.append(f"\n📇 <b>РЕКОМЕНДАЦИИ</b>")
-        for ref in data["references"][:2]:
-            ref_line = ref.get("full_name", "Рекомендатель")
-            if ref.get("position"):
-                ref_line += f", {ref['position']}"
-            if ref.get("company"):
-                ref_line += f", {ref['company']}"
-            lines.append(f"• {ref_line}")
-        if len(data["references"]) > 2:
-            lines.append(f"• ... и ещё {len(data['references']) - 2}")
 
     # About
     if data.get("about"):
@@ -220,10 +214,12 @@ def format_vacancy_preview(data: dict) -> str:
     if data.get("city"):
         lines.append(f"\n📍 <b>МЕСТОПОЛОЖЕНИЕ</b>")
         lines.append(f"Город: {data['city']}")
-        if data.get("address"):
-            lines.append(f"Адрес: {data['address']}")
-        if data.get("nearest_metro"):
-            lines.append(f"🚇 {data['nearest_metro']}")
+        # Support metro_stations array
+        metro_stations = data.get("metro_stations", [])
+        if metro_stations:
+            lines.append(f"🚇 Метро: {', '.join(metro_stations)}")
+        elif data.get("nearest_metro"):
+            lines.append(f"🚇 Метро: {data['nearest_metro']}")
 
     # Salary
     if data.get("salary_min") or data.get("salary_max"):

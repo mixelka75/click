@@ -8,12 +8,15 @@ from fastapi import APIRouter, HTTPException, status, Query, Body
 from beanie import PydanticObjectId
 from pydantic import BaseModel
 
-from backend.models import Resume, User, WorkExperience, Education, Course, Language as LangModel, Reference
+from backend.models import Resume, User, WorkExperience, Education, Course, Language as LangModel
 from backend.services import telegram_publisher
 from shared.constants import ResumeStatus
 
 
 router = APIRouter()
+
+
+MAX_RESUMES_PER_USER = 5
 
 
 class ResumeCreateRequest(BaseModel):
@@ -24,11 +27,16 @@ class ResumeCreateRequest(BaseModel):
     birth_date: Optional[str] = None  # ISO format YYYY-MM-DD
     city: str
     phone: str
-    desired_position: str
-    position_category: str
+    # Multi-position support
+    desired_positions: Optional[List[str]] = None
+    position_categories: Optional[List[str]] = None
+    # Backward compatibility
+    desired_position: Optional[str] = None
+    position_category: Optional[str] = None
     ready_to_relocate: Optional[bool] = False
-    ready_for_business_trips: Optional[bool] = False
     email: Optional[str] = None
+    # Multi-photo support
+    photo_file_ids: Optional[List[str]] = None
     photo_file_id: Optional[str] = None
     desired_salary: Optional[int] = None
     salary_type: Optional[str] = None
@@ -40,8 +48,6 @@ class ResumeCreateRequest(BaseModel):
     education: Optional[List[dict]] = None
     courses: Optional[List[dict]] = None
     languages: Optional[List[dict]] = None
-    references: Optional[List[dict]] = None
-    specialization: Optional[str] = None
     publication_duration_days: Optional[int] = 30
 
 
@@ -83,7 +89,15 @@ async def create_resume(request: ResumeCreateRequest):
             detail="User not found"
         )
 
-    resume_data = request.dict(exclude={"user_id"})
+    # Check resume limit
+    existing_resumes = await Resume.find({"user.$id": user.id}).count()
+    if existing_resumes >= MAX_RESUMES_PER_USER:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Достигнут лимит резюме ({MAX_RESUMES_PER_USER}). Удалите старое резюме, чтобы создать новое."
+        )
+
+    resume_data = request.model_dump(exclude={"user_id"})
 
     # Set expiration date
     publication_duration = resume_data.pop("publication_duration_days", 30)
@@ -145,20 +159,6 @@ async def create_resume(request: ResumeCreateRequest):
     else:
         resume_data["languages"] = []
 
-    # Convert references dicts to Reference objects
-    if resume_data.get("references"):
-        try:
-            resume_data["references"] = [
-                Reference(**ref) for ref in resume_data["references"]
-            ]
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid references data: {str(e)}"
-            )
-    else:
-        resume_data["references"] = []
-
     # Ensure all list fields are not None
     list_fields = ["work_schedule", "skills", "cuisines"]
     for field in list_fields:
@@ -169,10 +169,18 @@ async def create_resume(request: ResumeCreateRequest):
                 resume_data[field] = []
 
     # Ensure boolean fields have defaults
-    bool_fields = ["ready_to_relocate", "ready_for_business_trips"]
-    for field in bool_fields:
-        if resume_data.get(field) is None:
-            resume_data[field] = False
+    if resume_data.get("ready_to_relocate") is None:
+        resume_data["ready_to_relocate"] = False
+
+    # Multi-position: ensure backward compatibility
+    if resume_data.get("desired_positions") and not resume_data.get("desired_position"):
+        resume_data["desired_position"] = resume_data["desired_positions"][0]
+    if resume_data.get("position_categories") and not resume_data.get("position_category"):
+        resume_data["position_category"] = resume_data["position_categories"][0]
+
+    # Multi-photo: ensure backward compatibility
+    if resume_data.get("photo_file_ids") and not resume_data.get("photo_file_id"):
+        resume_data["photo_file_id"] = resume_data["photo_file_ids"][0]
 
     # Note: birth_date will be automatically converted by Pydantic from string to date
     # Keep it as string in resume_data, Beanie/Pydantic will handle the conversion

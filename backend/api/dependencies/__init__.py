@@ -137,7 +137,7 @@ async def get_current_active_applicant(
     current_user: User = Depends(get_current_user)
 ) -> User:
     """
-    Verify that current user is an applicant (job seeker).
+    Verify that current user has applicant role.
 
     Usage:
         @router.get("/my-resumes")
@@ -146,9 +146,9 @@ async def get_current_active_applicant(
             pass
 
     Raises:
-        HTTPException: 403 if user is not an applicant
+        HTTPException: 403 if user doesn't have applicant role
     """
-    if current_user.role != UserRole.APPLICANT:
+    if not current_user.has_role(UserRole.APPLICANT):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This action is only available to applicants"
@@ -160,7 +160,7 @@ async def get_current_active_employer(
     current_user: User = Depends(get_current_user)
 ) -> User:
     """
-    Verify that current user is an employer.
+    Verify that current user has employer role.
 
     Usage:
         @router.get("/my-vacancies")
@@ -169,9 +169,9 @@ async def get_current_active_employer(
             pass
 
     Raises:
-        HTTPException: 403 if user is not an employer
+        HTTPException: 403 if user doesn't have employer role
     """
-    if current_user.role != UserRole.EMPLOYER:
+    if not current_user.has_role(UserRole.EMPLOYER):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This action is only available to employers"

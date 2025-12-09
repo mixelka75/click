@@ -1,5 +1,5 @@
 """
-Start command handler.
+Start command handler with dual-role support and personal cabinet.
 """
 
 from aiogram import Router, F
@@ -8,8 +8,15 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from loguru import logger
 
-from bot.keyboards.common import get_role_selection_keyboard, get_main_menu_applicant, get_main_menu_employer, get_cancel_keyboard
-from backend.models import User
+from bot.keyboards.common import (
+    get_role_selection_keyboard,
+    get_main_menu_applicant,
+    get_main_menu_employer,
+    get_cancel_keyboard,
+    get_dual_role_selection_keyboard,
+    get_personal_cabinet_keyboard,
+)
+from backend.models import User, Resume, Vacancy
 from shared.constants import UserRole
 from bot.states.resume_states import ResumeCreationStates
 from bot.states.vacancy_states import VacancyCreationStates
@@ -24,36 +31,161 @@ from config.settings import settings
 router = Router()
 
 
+async def get_user_statistics(user: User) -> dict:
+    """Get user statistics for personal cabinet."""
+    stats = {
+        "resumes_count": 0,
+        "vacancies_count": 0,
+        "total_views": 0,
+        "total_responses": 0,
+    }
+
+    if user.has_role(UserRole.APPLICANT):
+        resumes = await Resume.find({"user.$id": user.id}).to_list()
+        stats["resumes_count"] = len(resumes)
+        stats["total_views"] = sum(r.views_count for r in resumes)
+        stats["total_responses"] = sum(r.responses_count for r in resumes)
+
+    if user.has_role(UserRole.EMPLOYER):
+        vacancies = await Vacancy.find({"user.$id": user.id}).to_list()
+        stats["vacancies_count"] = len(vacancies)
+        stats["total_views"] += sum(v.views_count for v in vacancies)
+        stats["total_responses"] += sum(v.responses_count for v in vacancies)
+
+    return stats
+
+
+async def get_user_photo(user: User) -> str | None:
+    """Get user's photo file_id from their resume."""
+    resume = await Resume.find_one(
+        {"user.$id": user.id, "is_published": True},
+        sort=[("created_at", -1)]
+    )
+    if resume and resume.photo_file_ids:
+        return resume.photo_file_ids[0]
+    elif resume and resume.photo_file_id:
+        return resume.photo_file_id
+    return None
+
+
+async def show_personal_cabinet(message: Message, user: User, is_edit: bool = False):
+    """Show personal cabinet with photo and statistics."""
+    stats = await get_user_statistics(user)
+    photo_file_id = await get_user_photo(user)
+
+    # Determine current role display
+    current_role = user.current_role or user.role
+    role_name = "Соискатель" if current_role == UserRole.APPLICANT else "Работодатель"
+    role_emoji = "👤" if current_role == UserRole.APPLICANT else "💼"
+
+    # Build cabinet text
+    cabinet_text = (
+        f"👋 <b>С возвращением, {user.first_name or 'друг'}!</b>\n\n"
+        f"{role_emoji} Роль: <b>{role_name}</b>\n"
+    )
+
+    if user.is_dual_role():
+        cabinet_text += "🔄 <i>У тебя двойная роль - можешь переключаться</i>\n"
+
+    cabinet_text += "\n📊 <b>Твоя статистика:</b>\n"
+
+    if user.has_role(UserRole.APPLICANT):
+        cabinet_text += f"📝 Резюме: {stats['resumes_count']}\n"
+
+    if user.has_role(UserRole.EMPLOYER):
+        cabinet_text += f"📋 Вакансий: {stats['vacancies_count']}\n"
+
+    cabinet_text += (
+        f"👁 Просмотров: {stats['total_views']}\n"
+        f"📬 Откликов: {stats['total_responses']}\n"
+    )
+
+    keyboard = get_personal_cabinet_keyboard(
+        user_has_dual_role=user.is_dual_role(),
+        current_role=current_role.value
+    )
+
+    # Send with photo if available
+    if photo_file_id and not is_edit:
+        try:
+            await message.answer_photo(
+                photo=photo_file_id,
+                caption=cabinet_text,
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send photo: {e}")
+            await message.answer(cabinet_text, reply_markup=keyboard)
+    else:
+        if is_edit and hasattr(message, 'edit_text'):
+            await message.edit_text(cabinet_text, reply_markup=keyboard)
+        else:
+            await message.answer(cabinet_text, reply_markup=keyboard)
+
+
+async def show_menu_for_role(message: Message, user: User):
+    """Show appropriate menu based on user's current role."""
+    current_role = user.current_role or user.role
+
+    if current_role == UserRole.APPLICANT:
+        menu_keyboard = get_main_menu_applicant()
+    else:
+        menu_keyboard = get_main_menu_employer()
+
+    await message.answer("📋 Главное меню:", reply_markup=menu_keyboard)
+
+
 async def handle_deep_link(message: Message, state: FSMContext, user: User, param: str):
     """Handle deep link from channel publication."""
+    from bot.handlers.common.complaint import handle_report_deep_link
+
     try:
-        # Parse param: format is "resume_ID" or "vacancy_ID"
+        # Parse param: format is "resume_ID", "vacancy_ID", "report_vacancy_ID", "report_resume_ID"
         parts = param.split("_", 1)
         if len(parts) != 2:
-            await message.answer("❌ Неверная ссылка. Попробуйте еще раз.")
+            await message.answer("❌ Неверная ссылка. Попробуй еще раз.")
             return
 
         entity_type, entity_id = parts
 
+        # Handle complaint deep links
+        if entity_type == "report":
+            # Further parse: entity_id contains "vacancy_ID" or "resume_ID"
+            report_parts = entity_id.split("_", 1)
+            if len(report_parts) != 2:
+                await message.answer("❌ Неверная ссылка жалобы.")
+                return
+            target_type, target_id = report_parts
+            await handle_report_deep_link(message, state, target_type, target_id)
+            return
+
         if entity_type == "resume":
             # Employer clicked "Пригласить" on resume
-            if user.role != UserRole.EMPLOYER:
+            if not user.has_role(UserRole.EMPLOYER):
                 await message.answer(
                     "❌ Эта функция доступна только работодателям.\n"
-                    "Пожалуйста, зарегистрируйтесь как работодатель."
+                    "Пожалуйста, зарегистрируйся как работодатель."
                 )
                 return
+
+            # Set current role to employer for this action
+            user.current_role = UserRole.EMPLOYER
+            await user.save()
 
             await handle_resume_invite(message, state, user, entity_id)
 
         elif entity_type == "vacancy":
             # Applicant clicked "Откликнуться" on vacancy
-            if user.role != UserRole.APPLICANT:
+            if not user.has_role(UserRole.APPLICANT):
                 await message.answer(
                     "❌ Эта функция доступна только соискателям.\n"
-                    "Пожалуйста, зарегистрируйтесь как соискатель."
+                    "Пожалуйста, зарегистрируйся как соискатель."
                 )
                 return
+
+            # Set current role to applicant for this action
+            user.current_role = UserRole.APPLICANT
+            await user.save()
 
             await handle_vacancy_apply(message, state, user, entity_id)
 
@@ -62,7 +194,7 @@ async def handle_deep_link(message: Message, state: FSMContext, user: User, para
 
     except Exception as e:
         logger.error(f"Error handling deep link: {e}")
-        await message.answer("❌ Произошла ошибка. Попробуйте позже.")
+        await message.answer("❌ Произошла ошибка. Попробуй позже.")
 
 
 async def handle_resume_invite(message: Message, state: FSMContext, user: User, resume_id: str):
@@ -265,21 +397,24 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
 
     if user:
-        # Existing user - show menu
+        # Existing user - show personal cabinet
         logger.info(f"Existing user {telegram_id} started bot")
 
-        if user.role == UserRole.APPLICANT:
-            menu_keyboard = get_main_menu_applicant()
-            welcome_text = f"👋 С возвращением, {user.first_name or 'друг'}!\n\n" \
-                          f"Вы зарегистрированы как <b>Соискатель</b>.\n\n" \
-                          f"Выберите действие из меню:"
-        else:
-            menu_keyboard = get_main_menu_employer()
-            welcome_text = f"👋 С возвращением, {user.first_name or 'друг'}!\n\n" \
-                          f"Вы зарегистрированы как <b>Работодатель</b>.\n\n" \
-                          f"Выберите действие из меню:"
+        # If dual-role user and no current_role set, ask which role to enter
+        if user.is_dual_role() and not user.current_role:
+            welcome_text = (
+                f"👋 <b>С возвращением, {user.first_name or 'друг'}!</b>\n\n"
+                f"У тебя двойная роль в системе.\n"
+                f"Под какой ролью хочешь войти?"
+            )
+            await message.answer(
+                welcome_text,
+                reply_markup=get_dual_role_selection_keyboard()
+            )
+            return
 
-        await message.answer(welcome_text, reply_markup=menu_keyboard)
+        # Show personal cabinet
+        await show_personal_cabinet(message, user)
 
     else:
         # New user - ask for role
@@ -289,7 +424,7 @@ async def cmd_start(message: Message, state: FSMContext):
             "👋 <b>Добро пожаловать в CLICK!</b>\n\n"
             "🎯 <b>CLICK</b> — это сервис для поиска работы и сотрудников в сфере HoReCa "
             "(рестораны, бары, кафе, гостиницы).\n\n"
-            "Выберите, кто вы:"
+            "Выбери, кто ты:"
         )
 
         await message.answer(
@@ -298,21 +433,174 @@ async def cmd_start(message: Message, state: FSMContext):
         )
 
 
-@router.callback_query(F.data.startswith("role:"))
-async def select_role(callback: CallbackQuery, state: FSMContext):
-    """Handle role selection."""
+@router.callback_query(F.data.startswith("enter_as:"))
+async def enter_as_role(callback: CallbackQuery, state: FSMContext):
+    """Handle role selection for dual-role users on start."""
     await callback.answer()
 
     role = callback.data.split(":")[1]
     telegram_id = callback.from_user.id
 
-    # Create new user
+    user = await User.find_one(User.telegram_id == telegram_id)
+    if not user:
+        await callback.message.answer("❌ Пользователь не найден. Используй /start")
+        return
+
+    # Set current role
+    user.current_role = UserRole(role)
+    await user.save()
+
+    logger.info(f"User {telegram_id} entered as {role}")
+
+    # Remove inline keyboard and show cabinet
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    # Show menu
+    await show_menu_for_role(callback.message, user)
+
+
+@router.callback_query(F.data.startswith("switch_role:"))
+async def switch_role(callback: CallbackQuery, state: FSMContext):
+    """Handle role switching for dual-role users."""
+    await callback.answer("Переключаю роль...")
+
+    new_role = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+
+    user = await User.find_one(User.telegram_id == telegram_id)
+    if not user:
+        await callback.message.answer("❌ Пользователь не найден.")
+        return
+
+    if not user.is_dual_role():
+        await callback.message.answer("❌ У тебя только одна роль.")
+        return
+
+    # Set new current role
+    user.current_role = UserRole(new_role)
+    await user.save()
+
+    role_name = "Соискатель" if new_role == "applicant" else "Работодатель"
+    logger.info(f"User {telegram_id} switched to {new_role}")
+
+    # Update cabinet text
+    await callback.message.edit_text(
+        f"✅ Ты переключился на роль: <b>{role_name}</b>",
+        reply_markup=None
+    )
+
+    # Show new menu
+    await show_menu_for_role(callback.message, user)
+
+
+@router.callback_query(F.data == "go_to_menu")
+async def go_to_menu(callback: CallbackQuery):
+    """Handle going to menu from personal cabinet."""
+    await callback.answer()
+
+    telegram_id = callback.from_user.id
+    user = await User.find_one(User.telegram_id == telegram_id)
+
+    if not user:
+        await callback.message.answer("❌ Пользователь не найден. Используй /start")
+        return
+
+    # Remove inline keyboard
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+    # Show menu
+    await show_menu_for_role(callback.message, user)
+
+
+@router.callback_query(F.data.startswith("add_role:"))
+async def add_second_role(callback: CallbackQuery, state: FSMContext):
+    """Handle adding a second role to user."""
+    await callback.answer()
+
+    action = callback.data.split(":")[1]
+
+    if action == "skip":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        return
+
+    telegram_id = callback.from_user.id
+    user = await User.find_one(User.telegram_id == telegram_id)
+
+    if not user:
+        await callback.message.answer("❌ Пользователь не найден.")
+        return
+
+    new_role = UserRole(action)
+
+    if user.has_role(new_role):
+        await callback.message.answer(f"У тебя уже есть эта роль.")
+        return
+
+    # Add new role
+    user.add_role(new_role)
+    await user.save()
+
+    role_name = "Соискатель" if action == "applicant" else "Работодатель"
+    logger.info(f"User {telegram_id} added role {action}")
+
+    await callback.message.edit_text(
+        f"✅ Роль <b>{role_name}</b> добавлена!\n\n"
+        f"Теперь ты можешь переключаться между ролями.",
+        reply_markup=None
+    )
+
+    # If added employer role, start vacancy creation
+    if new_role == UserRole.EMPLOYER:
+        await state.set_data({"first_vacancy": True})
+        creation_text = (
+            "📝 <b>Создание вакансии</b>\n\n"
+            "Отлично! Давай создадим твою первую вакансию.\n"
+            "Я помогу тебе заполнить все необходимые поля.\n\n"
+            "<b>Какую должность ищешь?</b>\n\nВыбери категорию:"
+        )
+        await callback.message.answer(
+            creation_text,
+            reply_markup=get_position_categories_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.position_category)
+
+    # If added applicant role, start resume creation
+    elif new_role == UserRole.APPLICANT:
+        await state.set_data({"first_resume": True})
+        creation_text = (
+            "📝 <b>Создание резюме</b>\n\n"
+            "Отлично! Давай создадим твоё резюме.\n"
+            "Я буду задавать тебе вопросы шаг за шагом.\n\n"
+            "<b>Как тебя зовут?</b> (ФИО полностью)"
+        )
+        await callback.message.answer(creation_text, reply_markup=get_cancel_keyboard())
+        await state.set_state(ResumeCreationStates.full_name)
+
+
+@router.callback_query(F.data.startswith("role:"))
+async def select_role(callback: CallbackQuery, state: FSMContext):
+    """Handle role selection for new users."""
+    await callback.answer()
+
+    role = callback.data.split(":")[1]
+    telegram_id = callback.from_user.id
+
+    # Check if user already exists (e.g., from another device)
+    existing_user = await User.find_one(User.telegram_id == telegram_id)
+    if existing_user:
+        await callback.message.edit_text(
+            "Ты уже зарегистрирован! Используй /start для входа."
+        )
+        return
+
+    # Create new user with roles list
     user = User(
         telegram_id=telegram_id,
         username=callback.from_user.username,
         first_name=callback.from_user.first_name,
         last_name=callback.from_user.last_name,
-        role=UserRole(role),
+        roles=[UserRole(role)],  # Use roles list instead of single role
+        current_role=UserRole(role),
     )
     await user.insert()
 
@@ -323,50 +611,47 @@ async def select_role(callback: CallbackQuery, state: FSMContext):
         menu_keyboard = get_main_menu_applicant()
         welcome_text = (
             f"✅ Отлично, {user.first_name or 'друг'}!\n\n"
-            f"Вы зарегистрированы как <b>Соискатель</b>.\n\n"
-            f"Давайте сразу создадим ваше резюме! 📝"
+            f"Ты зарегистрирован как <b>Соискатель</b>.\n\n"
+            f"Давай сразу создадим твоё резюме! 📝"
         )
 
         await callback.message.edit_text(welcome_text)
         await callback.message.answer("Главное меню:", reply_markup=menu_keyboard)
 
         # Automatically start resume creation
-        await state.set_data({"first_resume": True})  # Mark as first resume
+        await state.set_data({"first_resume": True})
         creation_text = (
             "📝 <b>Создание резюме</b>\n\n"
-            "Отлично! Давайте создадим ваше резюме.\n"
-            "Я буду задавать вам вопросы шаг за шагом.\n\n"
-            "Вы можете в любой момент:\n"
+            "Отлично! Давай создадим твоё резюме.\n"
+            "Я буду задавать тебе вопросы шаг за шагом.\n\n"
+            "Ты можешь в любой момент:\n"
             "• Использовать кнопку '🚫 Отменить создание' для отмены\n"
             "• Пропустить необязательные поля\n\n"
             "Начнём с основной информации.\n\n"
-            "<b>Как вас зовут?</b> (ФИО полностью)"
+            "<b>Как тебя зовут?</b> (ФИО полностью)"
         )
         await callback.message.answer(creation_text, reply_markup=get_cancel_keyboard())
-        logger.error(f"🚨 start.py: ResumeCreationStates class ID: {id(ResumeCreationStates)}")
-        logger.error(f"🚨 start.py: ResumeCreationStates.full_name = {ResumeCreationStates.full_name}")
         await state.set_state(ResumeCreationStates.full_name)
-        logger.warning(f"🔥 start.py set state to: {await state.get_state()}")
 
     else:
         menu_keyboard = get_main_menu_employer()
         welcome_text = (
             f"✅ Отлично, {user.first_name or 'друг'}!\n\n"
-            f"Вы зарегистрированы как <b>Работодатель</b>.\n\n"
-            f"Давайте сразу создадим вашу первую вакансию! 📝"
+            f"Ты зарегистрирован как <b>Работодатель</b>.\n\n"
+            f"Давай сразу создадим твою первую вакансию! 📝"
         )
 
         await callback.message.edit_text(welcome_text)
         await callback.message.answer("Главное меню:", reply_markup=menu_keyboard)
 
         # Automatically start vacancy creation
-        await state.set_data({"first_vacancy": True})  # Mark as first vacancy
+        await state.set_data({"first_vacancy": True})
         creation_text = (
             "📝 <b>Создание вакансии</b>\n\n"
-            "Отлично! Давайте создадим вашу вакансию.\n"
-            "Я помогу вам заполнить все необходимые поля.\n\n"
-            "Вы можете в любой момент использовать кнопку '🚫 Отменить создание'.\n\n"
-            "<b>Какую должность вы ищете?</b>\n\nВыберите категорию:"
+            "Отлично! Давай создадим твою вакансию.\n"
+            "Я помогу тебе заполнить все необходимые поля.\n\n"
+            "Ты можешь в любой момент использовать кнопку '🚫 Отменить создание'.\n\n"
+            "<b>Какую должность ищешь?</b>\n\nВыбери категорию:"
         )
         await callback.message.answer(
             creation_text,
@@ -382,15 +667,22 @@ async def cmd_menu(message: Message):
     user = await User.find_one(User.telegram_id == telegram_id)
 
     if not user:
-        await message.answer("Пожалуйста, начните с команды /start")
+        await message.answer("Пожалуйста, начни с команды /start")
         return
 
-    if user.role == UserRole.APPLICANT:
-        menu_keyboard = get_main_menu_applicant()
-    else:
-        menu_keyboard = get_main_menu_employer()
+    await show_menu_for_role(message, user)
 
-    await message.answer("📋 Главное меню:", reply_markup=menu_keyboard)
+@router.message(Command("cabinet"))
+async def cmd_cabinet(message: Message):
+    """Show personal cabinet."""
+    telegram_id = message.from_user.id
+    user = await User.find_one(User.telegram_id == telegram_id)
+
+    if not user:
+        await message.answer("Пожалуйста, начни с команды /start")
+        return
+
+    await show_personal_cabinet(message, user)
 
 
 # ============================================================================

@@ -7,6 +7,7 @@ from aiogram.types import Message
 from loguru import logger
 
 from backend.models import User
+from shared.constants import UserRole
 
 router = Router()
 
@@ -19,10 +20,12 @@ async def show_profile(message: Message):
         user = await User.find_one(User.telegram_id == telegram_id)
 
         if not user:
-            await message.answer("Пользователь не найден. Используйте /start для регистрации.")
+            await message.answer("Пользователь не найден. Используй /start для регистрации.")
             return
 
-        text = "<b>👤 Ваш профиль</b>\n\n"
+        current_role = user.current_role or user.role
+
+        text = "<b>👤 Твой профиль</b>\n\n"
 
         if user.first_name:
             text += f"Имя: {user.first_name}\n"
@@ -31,7 +34,18 @@ async def show_profile(message: Message):
         if user.username:
             text += f"Username: @{user.username}\n"
 
-        text += f"\nРоль: {'Соискатель' if user.role == 'applicant' else 'Работодатель'}\n"
+        # Show roles
+        role_names = []
+        if user.has_role(UserRole.APPLICANT):
+            role_names.append("Соискатель")
+        if user.has_role(UserRole.EMPLOYER):
+            role_names.append("Работодатель")
+
+        text += f"\nРоли: {', '.join(role_names)}\n"
+        if user.is_dual_role():
+            current_role_name = "Соискатель" if current_role == UserRole.APPLICANT else "Работодатель"
+            text += f"Активная роль: {current_role_name}\n"
+
         text += f"Telegram ID: {user.telegram_id}\n"
 
         if user.phone:

@@ -77,7 +77,29 @@ COMPANY_TYPES = [
     "Отель",
     "Пекарня",
     "Кондитерская",
+    "Караоке",      # NEW
+    "Кальянная",    # NEW
 ]
+
+
+# Industries for work experience (NEW)
+INDUSTRIES = [
+    ("🍽", "Ресторан"),
+    ("🥗", "Кафе"),
+    ("🍔", "Фастфуд"),
+    ("☕", "Кофейня"),
+    ("🍸", "Бар"),
+    ("💨", "Лаунж/Кальянная"),
+    ("🎉", "Кейтеринг"),
+    ("🥡", "Доставка еды"),
+    ("🍣", "Суши-бар"),
+    ("🧁", "Кондитерская/Пекарня"),
+    ("🏨", "Отель/Room-service"),
+    ("🎤", "Клуб/Караоке"),
+]
+
+# Industry names only (for validation)
+INDUSTRY_NAMES = [industry[1] for industry in INDUSTRIES]
 
 
 # Salary types
@@ -193,6 +215,81 @@ MAJOR_CITIES = [
 ]
 
 
+# Preset cities for quick selection (NEW)
+PRESET_CITIES = [
+    "Москва",
+    "Санкт-Петербург",
+    "Казань",
+    "Краснодар",
+]
+
+
 # Pagination
 DEFAULT_PAGE_SIZE = 10
 MAX_PAGE_SIZE = 100
+
+
+# ============================================================================
+# COMPLAINT SYSTEM
+# ============================================================================
+
+class ComplaintType(str, Enum):
+    """Type of content being reported."""
+    VACANCY = "vacancy"
+    RESUME = "resume"
+
+
+class ComplaintStatus(str, Enum):
+    """Complaint processing status."""
+    PENDING = "pending"       # Ожидает модерации
+    RESOLVED = "resolved"     # Одобрена, меры приняты
+    DISMISSED = "dismissed"   # Отклонена
+
+
+class ModerationAction(str, Enum):
+    """Action taken by moderator."""
+    NONE = "none"              # Оставить (жалоба отклонена)
+    DELETE = "delete"          # Удалить объявление
+    WARNING = "warning"        # Предупреждение автору
+    BAN = "ban"                # Заблокировать автора
+    IGNORE_REPORTER = "ignore_reporter"  # Игнорировать жалобщика
+
+
+# Причины жалоб на вакансии
+VACANCY_COMPLAINT_REASONS = [
+    ("false_info", "🚫 Недостоверная информация (ложная зарплата, неверный адрес)"),
+    ("fraud", "💰 Мошенничество / требуют оплату при трудоустройстве"),
+    ("rules_violation", "⚠️ Нарушение правил (оскорбления, дискриминация)"),
+    ("outdated", "📅 Вакансия неактуальна (закрыта, не обновлялась)"),
+    ("spam", "📧 Спам или реклама"),
+]
+
+# Причины жалоб на резюме
+RESUME_COMPLAINT_REASONS = [
+    ("false_info", "🚫 Недостоверная информация (сомнительный опыт)"),
+    ("inappropriate_content", "🔞 Неподходящее фото или контент"),
+    ("rules_violation", "⚠️ Нарушение правил платформы"),
+    ("empty_resume", "📝 Резюме пустое или бессмысленное"),
+    ("spam", "📧 Спам или реклама"),
+]
+
+# Dict for easy lookup
+COMPLAINT_REASONS = {
+    ComplaintType.VACANCY: {code: text for code, text in VACANCY_COMPLAINT_REASONS},
+    ComplaintType.RESUME: {code: text for code, text in RESUME_COMPLAINT_REASONS},
+}
+
+# Ignore durations (in hours)
+IGNORE_DURATIONS = [
+    (24, "1 день"),
+    (168, "1 неделя"),
+    (-1, "Навсегда"),
+]
+
+
+# Moderation thresholds
+COMPLAINTS_FOR_AUTO_MODERATION = 3  # Автоотправка на модерацию
+COMPLAINTS_FOR_AUTO_HIDE = 5        # Автоматическое скрытие
+DISMISSED_COMPLAINTS_FOR_BAN = 3    # Бан на жалобы
+COMPLAINT_COOLDOWN_MINUTES = 10     # Cooldown между жалобами
+MAX_COMPLAINTS_PER_DAY = 10         # Максимум жалоб в день

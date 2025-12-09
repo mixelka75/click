@@ -312,6 +312,9 @@ async def show_recommendation_card(message: Message, state: FSMContext, index: i
             InlineKeyboardButton(text="👎 Скип", callback_data=f"rec_skip:{index}"),
             InlineKeyboardButton(text="✅ Откликнуться", callback_data=f"rec_apply:{index}:{vacancy_id}")
         )
+        builder.row(
+            InlineKeyboardButton(text="🚨 Пожаловаться", callback_data=f"report_vacancy:{vacancy_id}")
+        )
 
         # Save current message ID to state for later removal of keyboard
         sent = await message.answer(text, reply_markup=builder.as_markup())

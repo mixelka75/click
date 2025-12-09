@@ -1,5 +1,6 @@
 """
-Resume creation - final steps (salary, experience, skills, preview, publish).
+Resume creation - Part 2: Work experience, education, courses, skills.
+Updated with new text style, industry buttons, and conditional skills.
 """
 
 from aiogram import Router, F
@@ -7,26 +8,22 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from datetime import datetime
 from loguru import logger
-import httpx
 
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.filters import IsNotMenuButton
 from bot.states.resume_states import ResumeCreationStates
-from bot.keyboards.positions import get_work_schedule_keyboard, get_skills_keyboard
+from bot.keyboards.positions import get_skills_keyboard, get_combined_skills_keyboard
 from bot.keyboards.common import (
     get_cancel_keyboard,
     get_back_cancel_keyboard,
     get_yes_no_keyboard,
     get_skip_button,
     get_present_time_button,
-    get_confirm_publish_keyboard,
+    get_industry_keyboard,
 )
-from bot.utils.formatters import format_resume_preview
 from bot.utils.cancel_handlers import handle_cancel_resume
-from backend.models import User
-from shared.constants import SalaryType
-from config.settings import settings
+from shared.constants import INDUSTRIES, INDUSTRY_NAMES
 
 
 router = Router()
@@ -45,164 +42,50 @@ EDUCATION_LEVEL_OPTIONS = [
 async def proceed_to_courses(message: Message, state: FSMContext) -> None:
     """Move flow to courses section."""
     await message.answer(
-        "🎓 <b>Повышение квалификации, курсы</b>\n\n"
-        "Добавить курсы или сертификаты?",
+        "🎓 <b>Курсы и сертификаты</b>\n\n"
+        "Проходил какие-нибудь курсы повышения квалификации?",
         reply_markup=get_yes_no_keyboard()
     )
     await state.set_state(ResumeCreationStates.add_courses)
 
 
 async def proceed_to_skills(message: Message, state: FSMContext) -> None:
-    """Move flow to skills selection."""
+    """Move flow to skills selection - only if has relevant experience."""
     data = await state.get_data()
-    category = data.get("position_category")
+    work_experience = data.get("work_experience", [])
+    position_categories = data.get("position_categories", [])
+
+    # Only show skills if user has work experience
+    if work_experience:
+        # Use combined skills keyboard for multiple categories
+        if len(position_categories) > 1:
+            await message.answer(
+                "<b>Какие у тебя навыки?</b> 🛠\n"
+                "(можно выбрать несколько)",
+                reply_markup=get_combined_skills_keyboard(position_categories, [])
+            )
+        else:
+            # Single category
+            category = position_categories[0] if position_categories else "other"
+            await message.answer(
+                "<b>Какие у тебя навыки?</b> 🛠\n"
+                "(можно выбрать несколько)",
+                reply_markup=get_skills_keyboard(category, [])
+            )
+        await state.set_state(ResumeCreationStates.skills)
+    else:
+        # Skip skills section if no work experience
+        await proceed_to_languages(message, state)
+
+
+async def proceed_to_languages(message: Message, state: FSMContext) -> None:
+    """Move flow to languages section."""
     await message.answer(
-        "<b>Выберите ваши навыки:</b>\n"
-        "(можно выбрать несколько)",
-        reply_markup=get_skills_keyboard(category, data.get("skills", []))
+        "🌍 <b>Знание языков</b>\n\n"
+        "Добавить информацию о владении языками?",
+        reply_markup=get_yes_no_keyboard()
     )
-    await state.set_state(ResumeCreationStates.skills)
-
-
-# ============ SALARY AND SCHEDULE ============
-
-@router.message(ResumeCreationStates.desired_salary)
-@router.callback_query(ResumeCreationStates.desired_salary, F.data == "skip")
-async def process_salary(message_or_callback, state: FSMContext):
-    """Process desired salary."""
-    salary = None
-
-    if isinstance(message_or_callback, CallbackQuery):
-        await message_or_callback.answer()
-        message = message_or_callback.message
-        # Удаляем кнопку "Пропустить"
-        try:
-            await message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-    else:
-        message = message_or_callback
-        if message.text == "🚫 Отменить создание":
-            await handle_cancel_resume(message, state)
-            return
-
-        # Удаляем инлайн-кнопку из предыдущего сообщения если пользователь ввел зарплату
-        data = await state.get_data()
-        skip_message_id = data.get("salary_skip_message_id")
-        if skip_message_id:
-            try:
-                await message.bot.edit_message_reply_markup(
-                    chat_id=message.chat.id,
-                    message_id=skip_message_id,
-                    reply_markup=None
-                )
-            except Exception:
-                pass
-
-        try:
-            salary = int(message.text.strip().replace(" ", "").replace(",", ""))
-            if salary < 0 or salary > 10000000:
-                await message.answer("Укажите реальную сумму от 0 до 10,000,000 рублей.")
-                return
-        except ValueError:
-            await message.answer("Пожалуйста, введите число (например: 80000)")
-            return
-
-    if salary:
-        await state.update_data(desired_salary=salary)
-
-        # Ask about salary type
-        from aiogram.utils.keyboard import InlineKeyboardBuilder
-        from aiogram.types import InlineKeyboardButton
-
-        builder = InlineKeyboardBuilder()
-        builder.row(
-            InlineKeyboardButton(text="💰 До вычета налогов", callback_data="salary_type:gross"),
-            InlineKeyboardButton(text="💵 На руки", callback_data="salary_type:net")
-        )
-
-        await message.answer(
-            f"<b>Зарплата: {salary:,} руб.</b>\n\n"
-            "Это сумма до вычета налогов или на руки?",
-            reply_markup=builder.as_markup()
-        )
-        await state.set_state(ResumeCreationStates.salary_type)
-    else:
-        # Skip salary, go to work schedule
-        await message.answer(
-            "<b>Какой график работы вас интересует?</b>\n"
-            "(можно выбрать несколько)",
-            reply_markup=get_work_schedule_keyboard([])
-        )
-        await state.set_state(ResumeCreationStates.work_schedule)
-
-
-@router.callback_query(ResumeCreationStates.salary_type, F.data.startswith("salary_type:"))
-async def process_salary_type(callback: CallbackQuery, state: FSMContext):
-    """Process salary type."""
-    await callback.answer()
-
-    salary_type = SalaryType.GROSS if callback.data == "salary_type:gross" else SalaryType.NET
-    salary_type_text = "До вычета налогов" if salary_type == SalaryType.GROSS else "На руки"
-    await state.update_data(salary_type=salary_type.value)
-
-    # Удаляем кнопки выбора типа зарплаты
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    data = await state.get_data()
-    await callback.message.answer(
-        f"✅ Зарплата: {data['desired_salary']:,} руб. ({salary_type_text})\n\n"
-        "<b>Какой график работы вас интересует?</b>\n"
-        "(можно выбрать несколько)",
-        reply_markup=get_work_schedule_keyboard([])
-    )
-    await state.set_state(ResumeCreationStates.work_schedule)
-
-
-@router.callback_query(ResumeCreationStates.work_schedule, F.data.startswith("schedule:"))
-async def process_work_schedule(callback: CallbackQuery, state: FSMContext):
-    """Process work schedule selection."""
-    await callback.answer()
-
-    data = await state.get_data()
-    schedules = data.get("work_schedule", [])
-
-    if callback.data == "schedule:done":
-        if not schedules:
-            await callback.answer("Выберите хотя бы один график!", show_alert=True)
-            return
-
-        # Удаляем кнопки выбора графика
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-
-        await callback.message.answer(
-            f"✅ Выбрано графиков: {len(schedules)}\n\n"
-            "<b>Добавим опыт работы?</b>\n"
-            "Это поможет работодателям оценить ваши навыки.",
-            reply_markup=get_yes_no_keyboard()
-        )
-        await state.set_state(ResumeCreationStates.add_work_experience)
-        return
-
-    # Toggle schedule
-    schedule = callback.data.split(":", 2)[2]
-    if schedule in schedules:
-        schedules.remove(schedule)
-    else:
-        schedules.append(schedule)
-
-    await state.update_data(work_schedule=schedules)
-
-    # Update keyboard
-    await callback.message.edit_reply_markup(
-        reply_markup=get_work_schedule_keyboard(schedules)
-    )
+    await state.set_state(ResumeCreationStates.add_languages)
 
 
 # ============ WORK EXPERIENCE ============
@@ -212,7 +95,6 @@ async def ask_add_work_experience(callback: CallbackQuery, state: FSMContext):
     """Ask if user wants to add work experience."""
     await callback.answer()
 
-    # Удаляем кнопки Да/Нет
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -221,15 +103,16 @@ async def ask_add_work_experience(callback: CallbackQuery, state: FSMContext):
     if callback.data == "confirm:yes":
         await callback.message.answer(
             "💼 <b>Опыт работы</b>\n\n"
-            "Отлично! Давайте добавим ваш опыт.\n\n"
+            "Отлично! Расскажи о своём опыте.\n\n"
             "<b>Название компании:</b>",
             reply_markup=get_cancel_keyboard()
         )
         await state.set_state(ResumeCreationStates.work_experience_company)
     else:
-        # Skip experience
+        # Skip experience - go to education
         await callback.message.answer(
-            "<b>Добавим образование?</b>",
+            "🎓 <b>Образование</b>\n\n"
+            "Добавим информацию об образовании?",
             reply_markup=get_yes_no_keyboard()
         )
         await state.set_state(ResumeCreationStates.add_education)
@@ -243,22 +126,23 @@ async def process_work_company(message: Message, state: FSMContext):
         return
 
     if message.text == "◀️ Назад":
-        # Return to work schedule
-        data = await state.get_data()
-        schedules = data.get("work_schedule", [])
+        # Return to add experience question
         await message.answer(
-            "<b>Какой график работы вас интересует?</b>\n"
-            "(можно выбрать несколько)",
-            reply_markup=get_work_schedule_keyboard(schedules)
+            "<b>Есть ли у тебя опыт работы?</b>",
+            reply_markup=get_yes_no_keyboard()
         )
-        await state.set_state(ResumeCreationStates.work_schedule)
+        await state.set_state(ResumeCreationStates.add_work_experience)
         return
 
-    # Start new work experience entry
-    await state.update_data(temp_company=message.text.strip())
+    company = message.text.strip()
+    if len(company) < 2:
+        await message.answer("Название компании слишком короткое")
+        return
+
+    await state.update_data(temp_company=company)
 
     await message.answer(
-        "<b>Ваша должность в этой компании:</b>",
+        "<b>Какая была должность?</b>",
         reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.work_experience_position)
@@ -272,163 +156,207 @@ async def process_work_position(message: Message, state: FSMContext):
         return
 
     if message.text == "◀️ Назад":
-        # Return to company name
         await message.answer(
             "💼 <b>Опыт работы</b>\n\n"
-            "Отлично! Давайте добавим ваш опыт.\n\n"
             "<b>Название компании:</b>",
             reply_markup=get_back_cancel_keyboard()
         )
         await state.set_state(ResumeCreationStates.work_experience_company)
         return
 
-    await state.update_data(temp_position=message.text.strip())
+    position = message.text.strip()
+    if len(position) < 2:
+        await message.answer("Название должности слишком короткое")
+        return
+
+    await state.update_data(temp_position=position)
 
     await message.answer(
-        "<b>Период работы (начало):</b>\n"
+        "<b>Когда начал работать?</b>\n"
         "Формат: ММ.ГГГГ (например: 01.2020)\n"
-        "Или нажмите кнопку ниже, чтобы пропустить",
+        "Или пропусти, если не помнишь точно",
         reply_markup=get_skip_button()
     )
     await state.set_state(ResumeCreationStates.work_experience_start_date)
 
 
 @router.message(ResumeCreationStates.work_experience_start_date)
-@router.callback_query(ResumeCreationStates.work_experience_start_date, F.data == "skip")
-async def process_work_start_date(message_or_callback, state: FSMContext):
-    """Process start date."""
-    start_date = None
+async def process_work_start_date_text(message: Message, state: FSMContext):
+    """Process start date text input."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
 
-    if isinstance(message_or_callback, CallbackQuery):
-        await message_or_callback.answer()
-        message = message_or_callback.message
-        # Удаляем кнопку "Пропустить"
-        try:
-            await message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-    else:
-        message = message_or_callback
-        if message.text == "🚫 Отменить создание":
-            await handle_cancel_resume(message, state)
-            return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Какая была должность?</b>",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.work_experience_position)
+        return
 
-        start_date = message.text.strip()
-        # Basic validation
-        if "/" not in start_date and "." not in start_date:
-            await message.answer("Используйте формат ММ.ГГГГ (например: 01.2020)")
-            return
+    start_date = message.text.strip()
 
-    await state.update_data(temp_start_date=start_date or "")
+    # Basic validation
+    if "." not in start_date and "/" not in start_date:
+        await message.answer(
+            "Формат: ММ.ГГГГ (например: 01.2020)\n"
+            "Или нажми кнопку 'Пропустить'"
+        )
+        return
+
+    await state.update_data(temp_start_date=start_date)
 
     await message.answer(
-        "<b>Период работы (окончание):</b>\n"
+        "<b>Когда закончил?</b>\n"
         "Формат: ММ.ГГГГ\n"
-        "Или нажмите кнопку ниже, чтобы пропустить",
+        "Или нажми кнопку, если работаешь до сих пор",
+        reply_markup=get_present_time_button()
+    )
+    await state.set_state(ResumeCreationStates.work_experience_end_date)
+
+
+@router.callback_query(ResumeCreationStates.work_experience_start_date, F.data == "skip")
+async def skip_work_start_date(callback: CallbackQuery, state: FSMContext):
+    """Skip start date."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await state.update_data(temp_start_date=None)
+
+    await callback.message.answer(
+        "<b>Когда закончил?</b>\n"
+        "Формат: ММ.ГГГГ\n"
+        "Или нажми кнопку, если работаешь до сих пор",
         reply_markup=get_present_time_button()
     )
     await state.set_state(ResumeCreationStates.work_experience_end_date)
 
 
 @router.message(ResumeCreationStates.work_experience_end_date)
-@router.callback_query(ResumeCreationStates.work_experience_end_date, F.data == "skip")
-async def process_work_end_date(message_or_callback, state: FSMContext):
-    """Process end date."""
-    end_date = None
+async def process_work_end_date_text(message: Message, state: FSMContext):
+    """Process end date text input."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
 
-    if isinstance(message_or_callback, CallbackQuery):
-        await message_or_callback.answer()
-        message = message_or_callback.message
-        end_date = "по настоящее время"
-        # Удаляем кнопку "По настоящее время"
-        try:
-            await message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-    else:
-        message = message_or_callback
-        if message.text == "🚫 Отменить создание":
-            await handle_cancel_resume(message, state)
-            return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Когда начал работать?</b>\n"
+            "Формат: ММ.ГГГГ (например: 01.2020)",
+            reply_markup=get_skip_button()
+        )
+        await state.set_state(ResumeCreationStates.work_experience_start_date)
+        return
 
-        end_date = message.text.strip()
+    end_date = message.text.strip()
 
-    await state.update_data(temp_end_date=end_date or "по настоящее время")
+    await state.update_data(temp_end_date=end_date)
 
-    resp_skip_msg = await message.answer(
-        "<b>Опишите ваши обязанности и достижения:</b>\n"
-        "(или нажмите кнопку ниже, чтобы пропустить)",
+    await message.answer(
+        "<b>Опиши свои обязанности и достижения</b>\n"
+        "(можно пропустить)",
         reply_markup=get_skip_button()
     )
-    await state.update_data(resp_skip_message_id=resp_skip_msg.message_id)
+    await state.set_state(ResumeCreationStates.work_experience_responsibilities)
+
+
+@router.callback_query(ResumeCreationStates.work_experience_end_date, F.data == "skip")
+async def skip_work_end_date(callback: CallbackQuery, state: FSMContext):
+    """Skip end date - means working till present."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await state.update_data(temp_end_date="по настоящее время")
+
+    await callback.message.answer(
+        "<b>Опиши свои обязанности и достижения</b>\n"
+        "(можно пропустить)",
+        reply_markup=get_skip_button()
+    )
     await state.set_state(ResumeCreationStates.work_experience_responsibilities)
 
 
 @router.message(ResumeCreationStates.work_experience_responsibilities)
-@router.callback_query(ResumeCreationStates.work_experience_responsibilities, F.data == "skip")
-async def process_work_responsibilities(message_or_callback, state: FSMContext):
-    """Process responsibilities and save work experience."""
-    responsibilities = None
+async def process_work_responsibilities_text(message: Message, state: FSMContext):
+    """Process responsibilities text input."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
 
-    if isinstance(message_or_callback, CallbackQuery):
-        await message_or_callback.answer()
-        message = message_or_callback.message
-        # Удаляем кнопку "Пропустить"
-        try:
-            await message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-    else:
-        message = message_or_callback
-        if message.text == "🚫 Отменить создание":
-            await handle_cancel_resume(message, state)
-            return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Когда закончил?</b>\n"
+            "Формат: ММ.ГГГГ",
+            reply_markup=get_present_time_button()
+        )
+        await state.set_state(ResumeCreationStates.work_experience_end_date)
+        return
 
-        # Удаляем инлайн-кнопку из предыдущего сообщения
-        data = await state.get_data()
-        skip_message_id = data.get("resp_skip_message_id")
-        if skip_message_id:
-            try:
-                await message.bot.edit_message_reply_markup(
-                    chat_id=message.chat.id,
-                    message_id=skip_message_id,
-                    reply_markup=None
-                )
-            except Exception:
-                pass
+    responsibilities = message.text.strip()
+    await state.update_data(temp_responsibilities=responsibilities)
 
-        responsibilities = message.text.strip()
-
-    await state.update_data(temp_responsibilities=responsibilities or "")
-
+    # Go to industry selection with buttons
     await message.answer(
-        "<b>Укажите сферу деятельности компании</b>\n"
-        "Например: ресторан, бар, кофейня, кейтеринг.",
-        reply_markup=get_back_cancel_keyboard()
+        "<b>В какой сфере работала компания?</b> 🏢\n"
+        "Выбери из списка:",
+        reply_markup=get_industry_keyboard()
     )
     await state.set_state(ResumeCreationStates.work_experience_industry)
 
 
-@router.message(ResumeCreationStates.work_experience_industry)
-async def process_work_industry(message: Message, state: FSMContext):
-    """Process company industry and finalize work experience entry."""
-    text = (message.text or "").strip()
+@router.callback_query(ResumeCreationStates.work_experience_responsibilities, F.data == "skip")
+async def skip_work_responsibilities(callback: CallbackQuery, state: FSMContext):
+    """Skip responsibilities."""
+    await callback.answer()
 
-    if text == "🚫 Отменить создание":
-        await handle_cancel_resume(message, state)
-        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
-    if text == "◀️ Назад":
-        await message.answer(
-            "<b>Опишите ваши обязанности и достижения:</b>\n"
-            "(или нажмите кнопку ниже, чтобы пропустить)",
-            reply_markup=get_skip_button()
-        )
-        await state.set_state(ResumeCreationStates.work_experience_responsibilities)
-        return
+    await state.update_data(temp_responsibilities=None)
 
-    industry = text if text.lower() != "пропустить" else ""
+    # Go to industry selection with buttons
+    await callback.message.answer(
+        "<b>В какой сфере работала компания?</b> 🏢\n"
+        "Выбери из списка:",
+        reply_markup=get_industry_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.work_experience_industry)
 
+
+@router.callback_query(ResumeCreationStates.work_experience_industry, F.data.startswith("industry:"))
+async def process_work_industry_callback(callback: CallbackQuery, state: FSMContext):
+    """Process industry selection from buttons."""
+    await callback.answer()
+
+    industry_data = callback.data.split(":", 1)[1]
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    if industry_data == "skip":
+        industry = None
+    else:
+        # Get industry by index
+        idx = int(industry_data)
+        if idx < len(INDUSTRIES):
+            industry = INDUSTRIES[idx][1]  # Get the name part
+        else:
+            industry = None
+
+    # Finalize work experience entry
     data = await state.get_data()
 
     work_exp_list = data.get("work_experience", [])
@@ -437,8 +365,8 @@ async def process_work_industry(message: Message, state: FSMContext):
         "position": data.get("temp_position"),
         "start_date": data.get("temp_start_date"),
         "end_date": data.get("temp_end_date"),
-        "responsibilities": data.get("temp_responsibilities", ""),
-        "industry": industry or None,
+        "responsibilities": data.get("temp_responsibilities"),
+        "industry": industry,
     })
 
     await state.update_data(
@@ -450,8 +378,10 @@ async def process_work_industry(message: Message, state: FSMContext):
         temp_responsibilities=None,
     )
 
-    await message.answer(
-        f"✅ Опыт работы добавлен!\n"
+    industry_text = f" ({industry})" if industry else ""
+
+    await callback.message.answer(
+        f"✅ Опыт работы добавлен!{industry_text}\n"
         f"Всего записей: {len(work_exp_list)}\n\n"
         "<b>Добавить ещё одно место работы?</b>",
         reply_markup=get_yes_no_keyboard()
@@ -464,7 +394,6 @@ async def ask_more_work_experience(callback: CallbackQuery, state: FSMContext):
     """Ask if user wants to add more work experience."""
     await callback.answer()
 
-    # Удаляем кнопки Да/Нет
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -480,7 +409,8 @@ async def ask_more_work_experience(callback: CallbackQuery, state: FSMContext):
     else:
         # Move to education
         await callback.message.answer(
-            "<b>Добавим образование?</b>",
+            "🎓 <b>Образование</b>\n\n"
+            "Добавим информацию об образовании?",
             reply_markup=get_yes_no_keyboard()
         )
         await state.set_state(ResumeCreationStates.add_education)
@@ -493,7 +423,6 @@ async def ask_add_education(callback: CallbackQuery, state: FSMContext):
     """Ask if user wants to add education."""
     await callback.answer()
 
-    # Удаляем кнопки Да/Нет
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -510,7 +439,7 @@ async def ask_add_education(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.answer(
         "🎓 <b>Образование</b>\n\n"
-        "Выберите уровень образования:",
+        "Выбери уровень:",
         reply_markup=builder.as_markup()
     )
     await state.set_state(ResumeCreationStates.education_level)
@@ -524,13 +453,13 @@ async def process_education_level(callback: CallbackQuery, state: FSMContext):
     level = callback.data.split(":", 1)[1]
     await state.update_data(temp_education_level=level)
 
-    # Удаляем кнопки выбора уровня образования
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
 
     await callback.message.answer(
+        f"📚 {level}\n\n"
         "<b>Название учебного заведения:</b>",
         reply_markup=get_back_cancel_keyboard()
     )
@@ -554,28 +483,28 @@ async def process_education_institution(message: Message, state: FSMContext):
 
         await message.answer(
             "🎓 <b>Образование</b>\n\n"
-            "Выберите уровень образования:",
+            "Выбери уровень:",
             reply_markup=builder.as_markup()
         )
         await state.set_state(ResumeCreationStates.education_level)
         return
 
     if len(text) < 2:
-        await message.answer("Пожалуйста, укажите полное название учебного заведения.")
+        await message.answer("Название слишком короткое")
         return
 
     await state.update_data(temp_education_institution=text)
 
     await message.answer(
-        "<b>Факультет / специализация</b>\n"
-        "Если не хотите уточнять, напишите 'Пропустить'.",
-        reply_markup=get_back_cancel_keyboard()
+        "<b>Факультет / специальность</b>\n"
+        "(можно пропустить)",
+        reply_markup=get_skip_button()
     )
     await state.set_state(ResumeCreationStates.education_faculty)
 
 
 @router.message(ResumeCreationStates.education_faculty)
-async def process_education_faculty(message: Message, state: FSMContext):
+async def process_education_faculty_text(message: Message, state: FSMContext):
     """Capture faculty or specialization."""
     text = (message.text or "").strip()
 
@@ -591,21 +520,38 @@ async def process_education_faculty(message: Message, state: FSMContext):
         await state.set_state(ResumeCreationStates.education_institution)
         return
 
-    if text.lower() != "пропустить" and text:
-        await state.update_data(temp_education_faculty=text)
-    else:
-        await state.update_data(temp_education_faculty=None)
+    await state.update_data(temp_education_faculty=text)
 
     await message.answer(
         "<b>Год окончания</b>\n"
-        "Укажите год (например: 2022) или напишите 'Пропустить'.",
-        reply_markup=get_back_cancel_keyboard()
+        "(например: 2022, или пропусти)",
+        reply_markup=get_skip_button()
+    )
+    await state.set_state(ResumeCreationStates.education_graduation_year)
+
+
+@router.callback_query(ResumeCreationStates.education_faculty, F.data == "skip")
+async def skip_education_faculty(callback: CallbackQuery, state: FSMContext):
+    """Skip faculty."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await state.update_data(temp_education_faculty=None)
+
+    await callback.message.answer(
+        "<b>Год окончания</b>\n"
+        "(например: 2022, или пропусти)",
+        reply_markup=get_skip_button()
     )
     await state.set_state(ResumeCreationStates.education_graduation_year)
 
 
 @router.message(ResumeCreationStates.education_graduation_year)
-async def process_education_graduation_year(message: Message, state: FSMContext):
+async def process_education_graduation_year_text(message: Message, state: FSMContext):
     """Capture graduation year and finalize education entry."""
     text = (message.text or "").strip()
 
@@ -615,29 +561,40 @@ async def process_education_graduation_year(message: Message, state: FSMContext)
 
     if text == "◀️ Назад":
         await message.answer(
-            "<b>Факультет / специализация</b>\n"
-            "Если не хотите уточнять, напишите 'Пропустить'.",
-            reply_markup=get_back_cancel_keyboard()
+            "<b>Факультет / специальность</b>\n"
+            "(можно пропустить)",
+            reply_markup=get_skip_button()
         )
         await state.set_state(ResumeCreationStates.education_faculty)
         return
 
     graduation_year = None
-    if text.lower() != "пропустить" and text:
-        if text.isdigit() and len(text) in {4, 2}:
-            try:
-                year_value = int(text[-4:])
-                if 1900 <= year_value <= datetime.utcnow().year + 6:
-                    graduation_year = year_value
-                else:
-                    await message.answer("Укажите реальный год окончания (например: 2022).")
-                    return
-            except ValueError:
-                graduation_year = None
+    if text.isdigit() and len(text) == 4:
+        year_value = int(text)
+        if 1950 <= year_value <= datetime.utcnow().year + 6:
+            graduation_year = year_value
         else:
-            await message.answer("Укажите год числом или напишите 'Пропустить'.")
+            await message.answer("Укажи реальный год окончания")
             return
 
+    await _save_education_and_continue(message, state, graduation_year)
+
+
+@router.callback_query(ResumeCreationStates.education_graduation_year, F.data == "skip")
+async def skip_education_graduation_year(callback: CallbackQuery, state: FSMContext):
+    """Skip graduation year."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await _save_education_and_continue(callback.message, state, None)
+
+
+async def _save_education_and_continue(message: Message, state: FSMContext, graduation_year):
+    """Save education entry and continue."""
     data = await state.get_data()
     education_list = data.get("education", [])
     faculty_value = data.get("temp_education_faculty")
@@ -658,8 +615,8 @@ async def process_education_graduation_year(message: Message, state: FSMContext)
     )
 
     await message.answer(
-        f"✅ Образование добавлено. Всего записей: {len(education_list)}\n\n"
-        "<b>Добавить ещё одно образование?</b>",
+        f"✅ Образование добавлено! Записей: {len(education_list)}\n\n"
+        "<b>Добавить ещё одно?</b>",
         reply_markup=get_yes_no_keyboard()
     )
     await state.set_state(ResumeCreationStates.education_more)
@@ -670,7 +627,6 @@ async def process_education_more(callback: CallbackQuery, state: FSMContext):
     """Handle request to add more education entries."""
     await callback.answer()
 
-    # Удаляем кнопки Да/Нет
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -683,8 +639,8 @@ async def process_education_more(callback: CallbackQuery, state: FSMContext):
         builder.adjust(1)
 
         await callback.message.answer(
-            "🎓 <b>Образование</b>\n\n"
-            "Выберите уровень образования:",
+            "🎓 <b>Ещё одно образование</b>\n\n"
+            "Выбери уровень:",
             reply_markup=builder.as_markup()
         )
         await state.set_state(ResumeCreationStates.education_level)
@@ -694,13 +650,11 @@ async def process_education_more(callback: CallbackQuery, state: FSMContext):
 
 # ============ COURSES ============
 
-
 @router.callback_query(ResumeCreationStates.add_courses, F.data.startswith("confirm:"))
 async def process_add_courses(callback: CallbackQuery, state: FSMContext):
     """Ask user to add courses or skip."""
     await callback.answer()
 
-    # Удаляем кнопки Да/Нет
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -711,7 +665,7 @@ async def process_add_courses(callback: CallbackQuery, state: FSMContext):
         return
 
     await callback.message.answer(
-        "<b>Название курса или программы:</b>",
+        "<b>Название курса:</b>",
         reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.course_name)
@@ -730,22 +684,22 @@ async def process_course_name(message: Message, state: FSMContext):
         await proceed_to_courses(message, state)
         return
 
-    if text.lower() == "пропустить" or not text:
-        await proceed_to_skills(message, state)
+    if len(text) < 2:
+        await message.answer("Название слишком короткое")
         return
 
     await state.update_data(temp_course_name=text)
 
     await message.answer(
-        "<b>Где проходили обучение?</b>\n"
-        "Укажите организатора (или напишите 'Пропустить').",
-        reply_markup=get_back_cancel_keyboard()
+        "<b>Кто проводил обучение?</b>\n"
+        "(можно пропустить)",
+        reply_markup=get_skip_button()
     )
     await state.set_state(ResumeCreationStates.course_organization)
 
 
 @router.message(ResumeCreationStates.course_organization)
-async def process_course_organization(message: Message, state: FSMContext):
+async def process_course_organization_text(message: Message, state: FSMContext):
     """Capture course organization."""
     text = (message.text or "").strip()
 
@@ -755,27 +709,44 @@ async def process_course_organization(message: Message, state: FSMContext):
 
     if text == "◀️ Назад":
         await message.answer(
-            "<b>Название курса или программы:</b>",
+            "<b>Название курса:</b>",
             reply_markup=get_back_cancel_keyboard()
         )
         await state.set_state(ResumeCreationStates.course_name)
         return
 
-    if text.lower() != "пропустить" and text:
-        await state.update_data(temp_course_organization=text)
-    else:
-        await state.update_data(temp_course_organization=None)
+    await state.update_data(temp_course_organization=text)
 
     await message.answer(
         "<b>Год окончания</b>\n"
-        "Укажите год (например: 2021) или напишите 'Пропустить'.",
-        reply_markup=get_back_cancel_keyboard()
+        "(можно пропустить)",
+        reply_markup=get_skip_button()
+    )
+    await state.set_state(ResumeCreationStates.course_year)
+
+
+@router.callback_query(ResumeCreationStates.course_organization, F.data == "skip")
+async def skip_course_organization(callback: CallbackQuery, state: FSMContext):
+    """Skip course organization."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await state.update_data(temp_course_organization=None)
+
+    await callback.message.answer(
+        "<b>Год окончания</b>\n"
+        "(можно пропустить)",
+        reply_markup=get_skip_button()
     )
     await state.set_state(ResumeCreationStates.course_year)
 
 
 @router.message(ResumeCreationStates.course_year)
-async def process_course_year(message: Message, state: FSMContext):
+async def process_course_year_text(message: Message, state: FSMContext):
     """Capture course completion year."""
     text = (message.text or "").strip()
 
@@ -785,26 +756,40 @@ async def process_course_year(message: Message, state: FSMContext):
 
     if text == "◀️ Назад":
         await message.answer(
-            "<b>Где проходили обучение?</b>\n"
-            "Укажите организатора (или напишите 'Пропустить').",
-            reply_markup=get_back_cancel_keyboard()
+            "<b>Кто проводил обучение?</b>\n"
+            "(можно пропустить)",
+            reply_markup=get_skip_button()
         )
         await state.set_state(ResumeCreationStates.course_organization)
         return
 
     completion_year = None
-    if text.lower() != "пропустить" and text:
-        if text.isdigit() and len(text) in {4, 2}:
-            year_value = int(text[-4:])
-            if 1950 <= year_value <= datetime.utcnow().year + 1:
-                completion_year = year_value
-            else:
-                await message.answer("Укажите корректный год окончания.")
-                return
+    if text.isdigit() and len(text) == 4:
+        year_value = int(text)
+        if 1950 <= year_value <= datetime.utcnow().year + 1:
+            completion_year = year_value
         else:
-            await message.answer("Укажите год числом или напишите 'Пропустить'.")
+            await message.answer("Укажи реальный год")
             return
 
+    await _save_course_and_continue(message, state, completion_year)
+
+
+@router.callback_query(ResumeCreationStates.course_year, F.data == "skip")
+async def skip_course_year(callback: CallbackQuery, state: FSMContext):
+    """Skip course year."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await _save_course_and_continue(callback.message, state, None)
+
+
+async def _save_course_and_continue(message: Message, state: FSMContext, completion_year):
+    """Save course entry and continue."""
     data = await state.get_data()
     courses = data.get("courses", [])
     courses.append({
@@ -820,8 +805,8 @@ async def process_course_year(message: Message, state: FSMContext):
     )
 
     await message.answer(
-        f"✅ Курс добавлен. Всего записей: {len(courses)}\n\n"
-        "<b>Добавить ещё один курс?</b>",
+        f"✅ Курс добавлен! Записей: {len(courses)}\n\n"
+        "<b>Добавить ещё один?</b>",
         reply_markup=get_yes_no_keyboard()
     )
     await state.set_state(ResumeCreationStates.course_more)
@@ -832,7 +817,6 @@ async def process_more_courses(callback: CallbackQuery, state: FSMContext):
     """Handle additional courses selection."""
     await callback.answer()
 
-    # Удаляем кнопки Да/Нет
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -840,7 +824,7 @@ async def process_more_courses(callback: CallbackQuery, state: FSMContext):
 
     if callback.data == "confirm:yes":
         await callback.message.answer(
-            "<b>Название курса или программы:</b>",
+            "<b>Название курса:</b>",
             reply_markup=get_back_cancel_keyboard()
         )
         await state.set_state(ResumeCreationStates.course_name)
@@ -848,4 +832,335 @@ async def process_more_courses(callback: CallbackQuery, state: FSMContext):
         await proceed_to_skills(callback.message, state)
 
 
-# Continued in next file...
+# ============ SKILLS ============
+
+@router.callback_query(ResumeCreationStates.skills, F.data.startswith("skill:"))
+async def process_skills(callback: CallbackQuery, state: FSMContext):
+    """Process skill selection."""
+    await callback.answer()
+
+    data = await state.get_data()
+    skills = data.get("skills", [])
+    position_categories = data.get("position_categories", [])
+
+    action = callback.data.split(":")[1]
+
+    if action == "done":
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        skills_text = ", ".join(skills) if skills else "Не указаны"
+        await callback.message.answer(
+            f"🛠 Навыки: {skills_text}\n\n"
+        )
+        await proceed_to_languages(callback.message, state)
+        return
+
+    if action == "skip":
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await proceed_to_languages(callback.message, state)
+        return
+
+    if action == "custom":
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await callback.message.answer(
+            "<b>Напиши свои навыки</b>\n"
+            "Можно через запятую (например: коктейли, кофе, латте-арт)",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.custom_skills)
+        return
+
+    if action == "t":
+        # Toggle skill by index
+        from shared.constants import get_skills_for_position, SKILLS_BY_CATEGORY
+
+        idx = int(callback.data.split(":")[2])
+
+        # Get all skills based on categories
+        if len(position_categories) > 1:
+            all_skills = []
+            seen = set()
+            for cat in position_categories:
+                cat_skills = SKILLS_BY_CATEGORY.get(cat, [])
+                for skill in cat_skills:
+                    if skill not in seen:
+                        seen.add(skill)
+                        all_skills.append(skill)
+        else:
+            category = position_categories[0] if position_categories else "other"
+            all_skills = get_skills_for_position(category)
+
+        if idx >= len(all_skills):
+            await callback.answer("Ошибка выбора", show_alert=True)
+            return
+
+        skill = all_skills[idx]
+
+        if skill in skills:
+            skills.remove(skill)
+        else:
+            skills.append(skill)
+
+        await state.update_data(skills=skills)
+
+        # Update keyboard
+        if len(position_categories) > 1:
+            keyboard = get_combined_skills_keyboard(position_categories, skills)
+        else:
+            category = position_categories[0] if position_categories else "other"
+            keyboard = get_skills_keyboard(category, skills)
+
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+
+
+@router.message(ResumeCreationStates.custom_skills)
+async def process_custom_skills(message: Message, state: FSMContext):
+    """Process custom skills input."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        data = await state.get_data()
+        position_categories = data.get("position_categories", [])
+        skills = data.get("skills", [])
+
+        if len(position_categories) > 1:
+            keyboard = get_combined_skills_keyboard(position_categories, skills)
+        else:
+            category = position_categories[0] if position_categories else "other"
+            keyboard = get_skills_keyboard(category, skills)
+
+        await message.answer(
+            "<b>Какие у тебя навыки?</b> 🛠\n"
+            "(можно выбрать несколько)",
+            reply_markup=keyboard
+        )
+        await state.set_state(ResumeCreationStates.skills)
+        return
+
+    # Parse custom skills (comma-separated)
+    custom_skills = [s.strip() for s in text.split(",") if s.strip()]
+
+    if not custom_skills:
+        await message.answer("Напиши хотя бы один навык")
+        return
+
+    data = await state.get_data()
+    skills = data.get("skills", [])
+
+    for skill in custom_skills:
+        if skill not in skills:
+            skills.append(skill)
+
+    await state.update_data(skills=skills)
+
+    skills_text = ", ".join(skills)
+    await message.answer(
+        f"🛠 Навыки: {skills_text}\n\n"
+    )
+    await proceed_to_languages(message, state)
+
+
+# ============ LANGUAGES ============
+
+@router.callback_query(ResumeCreationStates.add_languages, F.data.startswith("confirm:"))
+async def ask_add_languages(callback: CallbackQuery, state: FSMContext):
+    """Ask if user wants to add languages."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    if callback.data == "confirm:no":
+        await proceed_to_about(callback.message, state)
+        return
+
+    # Language input
+    await callback.message.answer(
+        "<b>Какой язык?</b>\n"
+        "Например: Английский, Немецкий",
+        reply_markup=get_back_cancel_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.language_name)
+
+
+async def proceed_to_about(message: Message, state: FSMContext) -> None:
+    """Move to about section."""
+    await message.answer(
+        "📝 <b>О себе</b>\n\n"
+        "Расскажи немного о себе — что важно для работодателя?\n"
+        "(можно пропустить)",
+        reply_markup=get_skip_button()
+    )
+    await state.set_state(ResumeCreationStates.about)
+
+
+@router.message(ResumeCreationStates.language_name)
+async def process_language_name(message: Message, state: FSMContext):
+    """Process language name."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "🌍 <b>Знание языков</b>\n\n"
+            "Добавить информацию о владении языками?",
+            reply_markup=get_yes_no_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.add_languages)
+        return
+
+    if len(text) < 2:
+        await message.answer("Название языка слишком короткое")
+        return
+
+    await state.update_data(temp_language_name=text)
+
+    # Language level buttons
+    from shared.constants import LANGUAGE_LEVELS
+
+    builder = InlineKeyboardBuilder()
+    for level in LANGUAGE_LEVELS:
+        builder.add(InlineKeyboardButton(
+            text=level,
+            callback_data=f"lang_level:{level}"
+        ))
+    builder.adjust(1)
+
+    await message.answer(
+        f"<b>Уровень владения {text}:</b>",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(ResumeCreationStates.language_level)
+
+
+@router.callback_query(ResumeCreationStates.language_level, F.data.startswith("lang_level:"))
+async def process_language_level(callback: CallbackQuery, state: FSMContext):
+    """Process language level selection."""
+    await callback.answer()
+
+    level = callback.data.split(":", 1)[1]
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    data = await state.get_data()
+    languages = data.get("languages", [])
+    languages.append({
+        "language": data.get("temp_language_name"),
+        "level": level,
+    })
+
+    await state.update_data(
+        languages=languages,
+        temp_language_name=None,
+    )
+
+    await callback.message.answer(
+        f"✅ Язык добавлен: {data.get('temp_language_name')} ({level})\n\n"
+        "<b>Добавить ещё один язык?</b>",
+        reply_markup=get_yes_no_keyboard()
+    )
+    await state.set_state(ResumeCreationStates.language_more)
+
+
+@router.callback_query(ResumeCreationStates.language_more, F.data.startswith("confirm:"))
+async def process_more_languages(callback: CallbackQuery, state: FSMContext):
+    """Handle additional languages."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    if callback.data == "confirm:yes":
+        await callback.message.answer(
+            "<b>Какой язык?</b>\n"
+            "Например: Английский, Немецкий",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.language_name)
+    else:
+        await proceed_to_about(callback.message, state)
+
+
+# ============ ABOUT ============
+
+@router.message(ResumeCreationStates.about)
+async def process_about_text(message: Message, state: FSMContext):
+    """Process about text."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await message.answer(
+            "🌍 <b>Знание языков</b>\n\n"
+            "Добавить информацию о владении языками?",
+            reply_markup=get_yes_no_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.add_languages)
+        return
+
+    await state.update_data(about=text)
+
+    # Proceed to photos (in resume_finalize.py)
+    await message.answer(
+        "📸 <b>Фотография</b>\n\n"
+        "Загрузи своё фото — это обязательно для резюме!\n\n"
+        "💡 <i>Советы:</i>\n"
+        "• Чёткое фото лица\n"
+        "• Нейтральный фон\n"
+        "• Деловой или опрятный вид\n"
+        "• Можно добавить до 5 фото"
+    )
+    await state.set_state(ResumeCreationStates.photo)
+
+
+@router.callback_query(ResumeCreationStates.about, F.data == "skip")
+async def skip_about(callback: CallbackQuery, state: FSMContext):
+    """Skip about section."""
+    await callback.answer()
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await state.update_data(about=None)
+
+    # Proceed to photos (in resume_finalize.py)
+    await callback.message.answer(
+        "📸 <b>Фотография</b>\n\n"
+        "Загрузи своё фото — это обязательно для резюме!\n\n"
+        "💡 <i>Советы:</i>\n"
+        "• Чёткое фото лица\n"
+        "• Нейтральный фон\n"
+        "• Деловой или опрятный вид\n"
+        "• Можно добавить до 5 фото"
+    )
+    await state.set_state(ResumeCreationStates.photo)

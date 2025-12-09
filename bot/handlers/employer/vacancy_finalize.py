@@ -178,6 +178,7 @@ async def process_publish_confirm(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
 
     # Prepare vacancy data for API
+    metro_stations = data.get("metro_stations", [])
     vacancy_data = {
         "user_id": str(user.id),
         "position": data.get("position"),
@@ -188,8 +189,9 @@ async def process_publish_confirm(callback: CallbackQuery, state: FSMContext):
         "company_size": data.get("company_size"),
         "company_website": data.get("company_website"),
         "city": data.get("city"),
-        "address": data.get("address"),
-        "nearest_metro": data.get("nearest_metro"),
+        # Metro instead of address
+        "nearest_metro": metro_stations[0] if metro_stations else data.get("nearest_metro"),
+        "metro_stations": metro_stations,
         "salary_min": data.get("salary_min"),
         "salary_max": data.get("salary_max"),
         "salary_type": data.get("salary_type"),

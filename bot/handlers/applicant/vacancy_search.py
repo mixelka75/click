@@ -25,7 +25,7 @@ async def start_vacancy_search(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     user = await User.find_one(User.telegram_id == telegram_id)
 
-    if not user or user.role != UserRole.APPLICANT:
+    if not user or not user.has_role(UserRole.APPLICANT):
         await message.answer("Эта функция доступна только для соискателей.")
         return
 

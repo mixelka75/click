@@ -5,7 +5,7 @@ User model for MongoDB using Beanie ODM.
 from datetime import datetime
 from typing import Optional, List
 from beanie import Document, Indexed
-from pydantic import Field, EmailStr
+from pydantic import Field, EmailStr, field_validator
 from shared.constants import UserRole
 
 
@@ -18,8 +18,17 @@ class User(Document):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
 
-    # Role
-    role: UserRole = Field(default=UserRole.APPLICANT)
+    # Roles - support multiple roles (dual-role)
+    roles: List[UserRole] = Field(default_factory=lambda: [UserRole.APPLICANT])
+    current_role: Optional[UserRole] = None  # Active role for session
+
+    # Backward compatibility - computed from roles
+    @property
+    def role(self) -> UserRole:
+        """Get primary role (backward compatibility)."""
+        if self.current_role:
+            return self.current_role
+        return self.roles[0] if self.roles else UserRole.APPLICANT
 
     # Contact information
     phone: Optional[str] = None
@@ -41,11 +50,24 @@ class User(Document):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     last_active: datetime = Field(default_factory=datetime.utcnow)
 
+    def has_role(self, role: UserRole) -> bool:
+        """Check if user has a specific role."""
+        return role in self.roles
+
+    def add_role(self, role: UserRole):
+        """Add a role to user."""
+        if role not in self.roles:
+            self.roles.append(role)
+
+    def is_dual_role(self) -> bool:
+        """Check if user has both applicant and employer roles."""
+        return UserRole.APPLICANT in self.roles and UserRole.EMPLOYER in self.roles
+
     class Settings:
         name = "users"
         indexes = [
             "telegram_id",
-            "role",
+            "roles",
             "created_at",
         ]
 
@@ -56,7 +78,8 @@ class User(Document):
                 "username": "john_doe",
                 "first_name": "John",
                 "last_name": "Doe",
-                "role": "applicant",
+                "roles": ["applicant"],
+                "current_role": "applicant",
                 "phone": "+79001234567",
                 "email": "john@example.com",
             }

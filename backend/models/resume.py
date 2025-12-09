@@ -64,6 +64,7 @@ class Resume(Document):
     birth_date: Optional[str] = None  # ISO format YYYY-MM-DD
     city: str
     ready_to_relocate: bool = Field(default=False)
+    # DEPRECATED: ready_for_business_trips - kept for backward compatibility
     ready_for_business_trips: bool = Field(default=False)
 
     # Work format preferences
@@ -75,12 +76,18 @@ class Resume(Document):
     phone: str
     email: Optional[str] = None
 
-    # Photo
+    # Photos (NEW: support multiple photos, min 1, max 5)
+    photo_file_ids: List[str] = Field(default_factory=list)  # List of Telegram file_ids
+    # DEPRECATED: photo_file_id - kept for backward compatibility (first photo)
     photo_file_id: Optional[str] = None  # Telegram file_id for photo
 
-    # Position and salary
-    desired_position: str
-    position_category: str  # From PositionCategory enum
+    # Position and salary (NEW: support multiple positions from multiple categories)
+    desired_positions: List[str] = Field(default_factory=list)  # ["Бармен", "Официант"]
+    position_categories: List[str] = Field(default_factory=list)  # ["barman", "waiter"]
+    # DEPRECATED: single position fields - kept for backward compatibility
+    desired_position: Optional[str] = None  # First position (deprecated)
+    position_category: Optional[str] = None  # First category (deprecated)
+    # DEPRECATED: specialization - temporarily removed
     specialization: Optional[str] = None  # For cooks: specific type
     cuisines: List[str] = Field(default_factory=list)  # For cooks only
     desired_salary: Optional[int] = None
@@ -106,10 +113,10 @@ class Resume(Document):
     # About
     about: Optional[str] = None
 
-    # References
+    # DEPRECATED: References - removed from creation flow, kept for backward compatibility
     references: List[Reference] = Field(default_factory=list)
 
-    # Photo
+    # Photo URL (external storage, if used)
     photo_url: Optional[str] = None
 
     # Status
@@ -148,15 +155,15 @@ class Resume(Document):
         name = "resumes"
         indexes = [
             "user",
-            "desired_position",
-            "position_category",
+            "desired_positions",  # Updated for multi-position
+            "position_categories",  # Updated for multi-category
             "city",
             "status",
             "is_published",
             "created_at",
             "published_at",
             [("is_published", 1), ("status", 1)],  # Composite index for filtering active resumes
-            [("position_category", 1), ("is_published", 1)],  # For category-based recommendations
+            [("position_categories", 1), ("is_published", 1)],  # For category-based recommendations
             [("city", 1), ("is_published", 1)],  # For location-based filtering
         ]
 
@@ -166,10 +173,64 @@ class Resume(Document):
                 "full_name": "Иван Иванов",
                 "city": "Москва",
                 "phone": "+79001234567",
-                "desired_position": "Бармен",
-                "position_category": "barman",
+                "desired_positions": ["Бармен", "Официант"],
+                "position_categories": ["barman", "waiter"],
                 "desired_salary": 80000,
                 "work_schedule": ["Полный день", "Посменный график"],
                 "skills": ["Классические коктейли", "Флэр"],
+                "photo_file_ids": ["file_id_1", "file_id_2"],
             }
         }
+
+    def migrate_single_to_multi(self) -> None:
+        """Migrate old single-value fields to new multi-value fields.
+        Call this for backward compatibility with old resumes.
+        """
+        # Migrate single position to list
+        if self.desired_position and not self.desired_positions:
+            self.desired_positions = [self.desired_position]
+
+        # Migrate single category to list
+        if self.position_category and not self.position_categories:
+            self.position_categories = [self.position_category]
+
+        # Migrate single photo to list
+        if self.photo_file_id and not self.photo_file_ids:
+            self.photo_file_ids = [self.photo_file_id]
+
+    def sync_deprecated_fields(self) -> None:
+        """Sync deprecated fields from new multi-value fields.
+        Call this before saving to maintain backward compatibility.
+        """
+        # Sync first position to deprecated field
+        if self.desired_positions:
+            self.desired_position = self.desired_positions[0]
+
+        # Sync first category to deprecated field
+        if self.position_categories:
+            self.position_category = self.position_categories[0]
+
+        # Sync first photo to deprecated field
+        if self.photo_file_ids:
+            self.photo_file_id = self.photo_file_ids[0]
+
+    @property
+    def primary_photo(self) -> Optional[str]:
+        """Get the primary (first) photo file_id."""
+        if self.photo_file_ids:
+            return self.photo_file_ids[0]
+        return self.photo_file_id
+
+    @property
+    def primary_position(self) -> Optional[str]:
+        """Get the primary (first) desired position."""
+        if self.desired_positions:
+            return self.desired_positions[0]
+        return self.desired_position
+
+    @property
+    def primary_category(self) -> Optional[str]:
+        """Get the primary (first) position category."""
+        if self.position_categories:
+            return self.position_categories[0]
+        return self.position_category

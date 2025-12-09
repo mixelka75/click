@@ -2,7 +2,7 @@
 Chat handlers - common for both applicants and employers.
 """
 
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -10,7 +10,7 @@ from aiogram.types import InlineKeyboardButton
 from loguru import logger
 import httpx
 
-from backend.models import User
+from backend.models import User, Chat
 from bot.states.chat_states import ChatStates
 from config.settings import settings
 from bot.utils.formatters import format_date
@@ -46,7 +46,7 @@ async def show_chats(message: Message, state: FSMContext):
     user = await User.find_one(User.telegram_id == telegram_id)
 
     if not user:
-        await message.answer("Пользователь не найден. Используйте /start")
+        await message.answer("Пользователь не найден. Используй /start")
         return
 
     try:
@@ -64,7 +64,7 @@ async def show_chats(message: Message, state: FSMContext):
             if not chats:
                 await message.answer(
                     "💬 <b>Сообщения</b>\n\n"
-                    "У вас пока нет активных чатов.\n\n"
+                    "У тебя пока нет активных чатов.\n\n"
                     "Чаты создаются автоматически при отклике на вакансию "
                     "или приглашении кандидата."
                 )
@@ -72,7 +72,7 @@ async def show_chats(message: Message, state: FSMContext):
 
             # Build chat list
             text = "💬 <b>Мои чаты</b>\n\n"
-            text += "Выберите чат для просмотра:\n\n"
+            text += "Выбери чат для просмотра:\n\n"
 
             builder = InlineKeyboardBuilder()
 
@@ -92,7 +92,7 @@ async def show_chats(message: Message, state: FSMContext):
             await state.set_state(ChatStates.viewing_chats)
 
     except httpx.TimeoutException:
-        await message.answer("⏱ Превышено время ожидания. Попробуйте позже.")
+        await message.answer("⏱ Превышено время ожидания. Попробуй позже.")
     except Exception as e:
         logger.error(f"Error loading chats: {e}")
         await message.answer("❌ Ошибка при загрузке чатов")
@@ -131,7 +131,7 @@ async def open_chat(callback: CallbackQuery, state: FSMContext):
 
             # Format messages
             if not messages:
-                text = "💬 <b>Чат</b>\n\n<i>Нет сообщений. Напишите первое сообщение!</i>"
+                text = "💬 <b>Чат</b>\n\n<i>Нет сообщений. Напиши первое сообщение!</i>"
             else:
                 text = "💬 <b>Чат</b>\n\n"
 
@@ -202,15 +202,15 @@ async def start_writing(callback: CallbackQuery, state: FSMContext):
     builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data=f"chat:open:{chat_id}"))
 
     await callback.message.edit_text(
-        "✍️ <b>Напишите сообщение</b>\n\n"
-        "Отправьте текст, фото или документ.",
+        "✍️ <b>Напиши сообщение</b>\n\n"
+        "Отправь текст, фото или документ.",
         reply_markup=builder.as_markup()
     )
     await state.set_state(ChatStates.waiting_for_message)
 
 
 @router.message(ChatStates.waiting_for_message)
-async def process_message(message: Message, state: FSMContext):
+async def process_message(message: Message, state: FSMContext, bot: Bot):
     """Process user's message and send to chat."""
     telegram_id = message.from_user.id
     user = await User.find_one(User.telegram_id == telegram_id)
@@ -333,6 +333,43 @@ async def process_message(message: Message, state: FSMContext):
                             )
                     except Exception as e:
                         logger.error(f"Error updating chat view: {e}")
+
+                # Send notification to recipient
+                try:
+                    chat_obj = await Chat.get(chat_id)
+                    if chat_obj:
+                        # Determine recipient
+                        if str(chat_obj.applicant.ref.id) == str(user.id):
+                            recipient_id = chat_obj.employer.ref.id
+                        else:
+                            recipient_id = chat_obj.applicant.ref.id
+
+                        recipient = await User.get(recipient_id)
+                        if recipient and recipient.telegram_id:
+                            # Prepare preview text
+                            preview = text[:50] + "..." if len(text) > 50 else text
+
+                            notification_text = (
+                                "💬 <b>Новое сообщение!</b>\n\n"
+                                f"<i>{preview}</i>"
+                            )
+
+                            notification_kb = InlineKeyboardBuilder()
+                            notification_kb.row(
+                                InlineKeyboardButton(
+                                    text="📖 Открыть чат",
+                                    callback_data=f"chat:open:{chat_id}"
+                                )
+                            )
+
+                            await bot.send_message(
+                                chat_id=recipient.telegram_id,
+                                text=notification_text,
+                                reply_markup=notification_kb.as_markup()
+                            )
+                            logger.info(f"Notification sent to user {recipient_id}")
+                except Exception as notify_err:
+                    logger.warning(f"Failed to send notification: {notify_err}")
             else:
                 await message.answer("❌ Ошибка при отправке сообщения")
 
@@ -372,12 +409,12 @@ async def return_to_chat_list(callback: CallbackQuery, state: FSMContext):
             if not chats:
                 await callback.message.edit_text(
                     "💬 <b>Сообщения</b>\n\n"
-                    "У вас пока нет активных чатов."
+                    "У тебя пока нет активных чатов."
                 )
                 return
 
             text = "💬 <b>Мои чаты</b>\n\n"
-            text += "Выберите чат для просмотра:\n\n"
+            text += "Выбери чат для просмотра:\n\n"
 
             builder = InlineKeyboardBuilder()
 

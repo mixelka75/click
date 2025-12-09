@@ -6,6 +6,7 @@ Manage job applications - view, accept, reject.
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 import httpx
 from datetime import datetime
@@ -46,7 +47,7 @@ async def manage_responses(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     user = await User.find_one(User.telegram_id == telegram_id)
 
-    if not user or user.role != UserRole.EMPLOYER:
+    if not user or not user.has_role(UserRole.EMPLOYER):
         await message.answer("Эта функция доступна только для работодателей.")
         return
 
@@ -231,9 +232,15 @@ async def show_response_card(message: Message, state: FSMContext, index: int) ->
         elif status == "invited":
             buttons.append([
                 InlineKeyboardButton(
-                    text="✅ Отметить как принят",
+                    text="💬 Написать",
+                    callback_data=f"resp_chat:{response_id}"
+                ),
+                InlineKeyboardButton(
+                    text="✅ Принят",
                     callback_data=f"resp_accept:{response_id}"
                 ),
+            ])
+            buttons.append([
                 InlineKeyboardButton(
                     text="❌ Отклонить",
                     callback_data=f"resp_reject:{response_id}"
@@ -241,6 +248,10 @@ async def show_response_card(message: Message, state: FSMContext, index: int) ->
             ])
         elif status == "accepted":
             buttons.append([
+                InlineKeyboardButton(
+                    text="💬 Написать",
+                    callback_data=f"resp_chat:{response_id}"
+                ),
                 InlineKeyboardButton(
                     text="❌ Отклонить",
                     callback_data=f"resp_reject:{response_id}"
@@ -387,7 +398,7 @@ async def navigate_responses(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("resp_accept:"))
 async def accept_response(callback: CallbackQuery, state: FSMContext):
-    """Accept response."""
+    """Accept response and create chat."""
     await callback.answer("Принимаю отклик...")
 
     response_id = callback.data.split(":")[1]
@@ -401,9 +412,34 @@ async def accept_response(callback: CallbackQuery, state: FSMContext):
             )
 
             if response.status_code == 200:
+                # Create chat for this response
+                chat_response = await client.post(
+                    f"http://backend:8000{settings.api_prefix}/chats/create",
+                    params={"response_id": response_id},
+                    timeout=10.0
+                )
+
+                chat_id = None
+                if chat_response.status_code == 201:
+                    chat_data = chat_response.json()
+                    chat_id = chat_data.get("id")
+
+                # Build keyboard with "Написать" button
+                builder = InlineKeyboardBuilder()
+                if chat_id:
+                    builder.row(InlineKeyboardButton(
+                        text="💬 Написать кандидату",
+                        callback_data=f"chat:open:{chat_id}"
+                    ))
+                builder.row(InlineKeyboardButton(
+                    text="🔙 К отклику",
+                    callback_data="refresh_current_response"
+                ))
+
                 await callback.message.answer(
-                    "✅ <b>Статус обновлён.</b>\n\n"
-                    "Кандидат отмечен как принятый."
+                    "✅ <b>Кандидат принят!</b>\n\n"
+                    "Теперь ты можешь написать ему сообщение.",
+                    reply_markup=builder.as_markup()
                 )
 
                 # Refresh current response
@@ -420,7 +456,6 @@ async def accept_response(callback: CallbackQuery, state: FSMContext):
                 if reload_response.status_code == 200:
                     new_responses = reload_response.json()
                     await state.update_data(responses=new_responses)
-                    await show_response_card(callback.message, state, current_index)
 
             else:
                 await callback.message.answer("❌ Ошибка при обновлении статуса.")
@@ -477,7 +512,7 @@ async def reject_response(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("resp_invite:"))
 async def invite_from_response(callback: CallbackQuery, state: FSMContext):
-    """Invite candidate (change status to invited)."""
+    """Invite candidate and create chat."""
     await callback.answer("Отправляю приглашение...")
 
     response_id = callback.data.split(":")[1]
@@ -491,9 +526,34 @@ async def invite_from_response(callback: CallbackQuery, state: FSMContext):
             )
 
             if response.status_code == 200:
+                # Create chat for this response
+                chat_response = await client.post(
+                    f"http://backend:8000{settings.api_prefix}/chats/create",
+                    params={"response_id": response_id},
+                    timeout=10.0
+                )
+
+                chat_id = None
+                if chat_response.status_code == 201:
+                    chat_data = chat_response.json()
+                    chat_id = chat_data.get("id")
+
+                # Build keyboard with "Написать" button
+                builder = InlineKeyboardBuilder()
+                if chat_id:
+                    builder.row(InlineKeyboardButton(
+                        text="💬 Написать кандидату",
+                        callback_data=f"chat:open:{chat_id}"
+                    ))
+                builder.row(InlineKeyboardButton(
+                    text="🔙 К отклику",
+                    callback_data="refresh_current_response"
+                ))
+
                 await callback.message.answer(
                     "🤝 <b>Предложение отправлено!</b>\n\n"
-                    "Бот уведомил кандидата и передал ваши контакты."
+                    "Бот уведомил кандидата. Теперь ты можешь написать ему сообщение.",
+                    reply_markup=builder.as_markup()
                 )
 
                 # Refresh current response
@@ -510,7 +570,6 @@ async def invite_from_response(callback: CallbackQuery, state: FSMContext):
                 if reload_response.status_code == 200:
                     new_responses = reload_response.json()
                     await state.update_data(responses=new_responses)
-                    await show_response_card(callback.message, state, current_index)
 
             else:
                 await callback.message.answer("❌ Ошибка при отправке приглашения.")
@@ -580,3 +639,47 @@ async def back_to_vacancies(callback: CallbackQuery, state: FSMContext):
 
     # Re-trigger the main handler
     await manage_responses(callback.message, state)
+
+
+@router.callback_query(F.data.startswith("resp_chat:"))
+async def open_chat_from_response(callback: CallbackQuery, state: FSMContext):
+    """Open chat from response card."""
+    await callback.answer()
+
+    response_id = callback.data.split(":")[1]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Get or create chat for this response
+            chat_response = await client.post(
+                f"http://backend:8000{settings.api_prefix}/chats/create",
+                params={"response_id": response_id},
+                timeout=10.0
+            )
+
+            if chat_response.status_code == 201:
+                chat_data = chat_response.json()
+                chat_id = chat_data.get("id")
+
+                # Redirect to chat handler
+                from bot.handlers.common.chat import open_chat
+                # We need to simulate the callback with the chat ID
+                callback.data = f"chat:open:{chat_id}"
+                await open_chat(callback, state)
+            else:
+                await callback.message.answer("❌ Ошибка при открытии чата.")
+
+    except Exception as e:
+        logger.error(f"Error opening chat from response: {e}")
+        await callback.message.answer("❌ Ошибка при открытии чата.")
+
+
+@router.callback_query(F.data == "refresh_current_response")
+async def refresh_current_response(callback: CallbackQuery, state: FSMContext):
+    """Refresh and show current response card."""
+    await callback.answer()
+
+    data = await state.get_data()
+    current_index = data.get("current_response_index", 0)
+
+    await show_response_card(callback.message, state, current_index)

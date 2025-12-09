@@ -112,12 +112,41 @@ SUPPORT_SKILLS = [
     "Организация рабочего места",
 ]
 
+# Hookah master skills (NEW)
+HOOKAH_SKILLS = [
+    "Приготовление кальяна",
+    "Знание табаков",
+    "Миксология кальянов",
+    "Работа с жаростойким углём",
+    "Обслуживание гостей",
+    "Чистка и уход за оборудованием",
+    "Авторские миксы",
+    "Знание кальянных чаш",
+    "Работа с плотностью забивки",
+    "Консультирование по вкусам",
+]
+
+# Household staff skills (NEW)
+HOUSEHOLD_SKILLS = [
+    "Уборка помещений",
+    "Мытьё посуды",
+    "Работа с посудомоечными машинами",
+    "Работа с профессиональной химией",
+    "Санитарные нормы",
+    "Организация рабочего места",
+    "Работа с гардеробом",
+    "Инвентаризация",
+    "Мелкий ремонт",
+]
+
 # Combined skills by position category
 SKILLS_BY_CATEGORY: Dict[str, List[str]] = {
     PositionCategory.COOK: COOK_SKILLS,
     PositionCategory.BARMAN: BARMAN_SKILLS,
     PositionCategory.WAITER: WAITER_SKILLS,
     PositionCategory.BARISTA: BARISTA_SKILLS,
+    PositionCategory.HOOKAH: HOOKAH_SKILLS,        # NEW
+    PositionCategory.HOUSEHOLD: HOUSEHOLD_SKILLS,  # NEW
     PositionCategory.MANAGEMENT: MANAGEMENT_SKILLS,
     PositionCategory.SUPPORT: SUPPORT_SKILLS,
 }

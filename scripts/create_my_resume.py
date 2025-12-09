@@ -36,14 +36,16 @@ async def create_user_resume():
             username="current_user",
             first_name="Текущий",
             last_name="Пользователь",
-            role=UserRole.APPLICANT,
+            roles=[UserRole.APPLICANT],
+            current_role=UserRole.APPLICANT,
         )
         await user.insert()
         logger.info("✓ User created")
     else:
-        # Обновить роль на соискателя если нужно
-        if user.role != UserRole.APPLICANT:
-            user.role = UserRole.APPLICANT
+        # Add applicant role if user doesn't have it
+        if not user.has_role(UserRole.APPLICANT):
+            user.add_role(UserRole.APPLICANT)
+            user.current_role = UserRole.APPLICANT
             await user.save()
             logger.info(f"✓ User role updated to APPLICANT")
         logger.info(f"✓ Found existing user: {user.first_name} {user.last_name}")

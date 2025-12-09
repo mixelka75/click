@@ -80,21 +80,23 @@ async def telegram_auth(request: TelegramAuthRequest) -> TokenResponse:
             user.first_name = request.first_name
             user.last_name = request.last_name
 
-            # Update role if provided and not set
-            if request.role and user.role != request.role:
-                user.role = request.role
+            # Add role if provided and user doesn't have it
+            if request.role and not user.has_role(request.role):
+                user.add_role(request.role)
 
             await user.save()
             logger.info(f"Updated existing user: {user.telegram_id}")
 
         else:
-            # Create new user
+            # Create new user with roles list
+            initial_role = request.role or UserRole.APPLICANT
             user = User(
                 telegram_id=request.telegram_id,
                 username=request.username,
                 first_name=request.first_name,
                 last_name=request.last_name,
-                role=request.role or UserRole.APPLICANT,
+                roles=[initial_role],
+                current_role=initial_role,
             )
             await user.insert()
             logger.info(f"Created new user: {user.telegram_id}")

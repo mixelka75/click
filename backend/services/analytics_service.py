@@ -107,9 +107,12 @@ class AnalyticsService:
         """Get overall statistics for a user."""
         try:
             from shared.constants import UserRole
-            if user.role == UserRole.APPLICANT:
+
+            # For dual-role users, use current role
+            current_role = user.current_role or user.role
+            if current_role == UserRole.APPLICANT:
                 return await self._get_applicant_statistics(user)
-            if user.role == UserRole.EMPLOYER:
+            elif current_role == UserRole.EMPLOYER:
                 return await self._get_employer_statistics(user)
             return {}
         except Exception as e:

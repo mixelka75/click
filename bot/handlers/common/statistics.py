@@ -21,14 +21,15 @@ async def show_statistics(message: Message, state: FSMContext):
         user = await User.find_one(User.telegram_id == telegram_id)
 
         if not user:
-            await message.answer("Пользователь не найден. Используйте /start для регистрации.")
+            await message.answer("Пользователь не найден. Используй /start для регистрации.")
             return
 
-        # Calculate statistics based on role
-        if user.role == UserRole.APPLICANT:
+        # Calculate statistics based on current role
+        current_role = user.current_role or user.role
+        if current_role == UserRole.APPLICANT:
             stats = await calculate_applicant_statistics(user)
             await show_applicant_statistics(message, stats)
-        elif user.role == UserRole.EMPLOYER:
+        elif current_role == UserRole.EMPLOYER:
             stats = await calculate_employer_statistics(user)
             await show_employer_statistics(message, stats)
         else:

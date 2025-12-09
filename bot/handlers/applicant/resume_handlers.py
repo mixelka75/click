@@ -16,12 +16,15 @@ from shared.constants import UserRole  # удалён ResumeStatus как неи
 from config.settings import settings
 from bot.utils.formatters import format_date  # удалён format_salary_range
 from bot.states.resume_states import ResumeCreationStates, ResumeEditStates
-from bot.keyboards.common import get_cancel_keyboard
+from bot.keyboards.common import get_cancel_keyboard, get_main_menu_applicant
 from bot.utils.auth import get_user_token
 from backend.api.dependencies import create_access_token
 
 
 router = Router()
+
+MAX_RESUMES_PER_USER = 5
+
 
 async def build_auth_headers(telegram_id: int, state: FSMContext | None) -> dict:
     """Получить заголовок авторизации. Если state пустой — локально сгенерировать JWT и сохранить в state."""
@@ -83,8 +86,20 @@ async def start_resume_creation(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     user = await User.find_one(User.telegram_id == telegram_id)
 
-    if not user or user.role != UserRole.APPLICANT:
+    if not user or not user.has_role(UserRole.APPLICANT):
         await message.answer("Эта функция доступна только для соискателей.")
+        return
+
+    # Check resume limit
+    existing_resumes = await Resume.find({"user.$id": user.id}).count()
+    if existing_resumes >= MAX_RESUMES_PER_USER:
+        await message.answer(
+            f"📋 <b>Достигнут лимит резюме</b>\n\n"
+            f"У тебя уже {existing_resumes} резюме (максимум {MAX_RESUMES_PER_USER}).\n\n"
+            "Чтобы создать новое резюме, сначала удали одно из существующих "
+            "в разделе «📋 Мои резюме».",
+            reply_markup=get_main_menu_applicant()
+        )
         return
 
     logger.info(f"User {telegram_id} started resume creation")
@@ -93,13 +108,13 @@ async def start_resume_creation(message: Message, state: FSMContext):
 
     welcome_text = (
         "📝 <b>Создание резюме</b>\n\n"
-        "Отлично! Давайте создадим ваше резюме.\n"
-        "Я буду задавать вам вопросы шаг за шагом.\n\n"
-        "Вы можете в любой момент:\n"
+        "Отлично! Давай создадим твоё резюме.\n"
+        "Я буду задавать вопросы шаг за шагом.\n\n"
+        "Ты можешь в любой момент:\n"
         "• Использовать кнопку '🚫 Отменить создание' для отмены\n"
         "• Пропустить необязательные поля\n\n"
         "Начнём с основной информации.\n\n"
-        "<b>Как вас зовут?</b> (ФИО полностью)"
+        "<b>Как тебя зовут?</b> (ФИО полностью)"
     )
 
     await message.answer(welcome_text, reply_markup=get_cancel_keyboard())
@@ -156,9 +171,13 @@ def format_resume_details(resume: Resume) -> str:
     if getattr(resume, 'other_contacts', None):
         lines.append(f"   🔗 {resume.other_contacts}")
 
-    # Desired position
-    lines.append(f"\n💼 <b>ЖЕЛАЕМАЯ ДОЛЖНОСТЬ</b>")
-    lines.append(f"   Должность: {resume.desired_position}")
+    # Desired positions - support multi-positions
+    lines.append(f"\n💼 <b>ЖЕЛАЕМЫЕ ДОЛЖНОСТИ</b>")
+    desired_positions = getattr(resume, 'desired_positions', None)
+    if desired_positions and len(desired_positions) > 0:
+        lines.append(f"   Должности: {', '.join(desired_positions)}")
+    elif resume.desired_position:
+        lines.append(f"   Должность: {resume.desired_position}")
     if resume.cuisines:
         lines.append(f"   Кухни: {', '.join(resume.cuisines[:3])}")
     if resume.desired_salary:
@@ -212,24 +231,6 @@ def format_resume_details(resume: Resume) -> str:
                 course_line += f" ({course.completion_year})"
             lines.append(f"   • {course_line}")
 
-    # References
-    if getattr(resume, 'references', None):
-        lines.append(f"\n📇 <b>РЕКОМЕНДАЦИИ</b>")
-        for reference in resume.references[:3]:
-            ref_line = reference.full_name
-            if reference.position:
-                ref_line += f", {reference.position}"
-            if reference.company:
-                ref_line += f", {reference.company}"
-            contact_parts = []
-            if reference.phone:
-                contact_parts.append(reference.phone)
-            if reference.email:
-                contact_parts.append(reference.email)
-            if contact_parts:
-                ref_line += f" — {'; '.join(contact_parts)}"
-            lines.append(f"   • {ref_line}")
-
     # Analytics
     lines.append(f"\n📊 <b>Статистика:</b>")
     lines.append(f"   👁 Просмотров: {resume.views_count}")
@@ -257,13 +258,15 @@ def get_resume_management_keyboard(resume_id: str, status: str) -> InlineKeyboar
     )
 
     # Second row: Archive/Restore
-    if status == "published":
+    if status == "published" or status == "active":
         builder.row(
-            InlineKeyboardButton(text="🗄️ Архивировать", callback_data=f"resume:archive:{resume_id}")
+            InlineKeyboardButton(text="🗄️ В архив", callback_data=f"resume:archive:{resume_id}"),
+            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"resume:delete:{resume_id}")
         )
     elif status == "archived":
         builder.row(
-            InlineKeyboardButton(text="♻️ Восстановить", callback_data=f"resume:restore:{resume_id}")
+            InlineKeyboardButton(text="♻️ Восстановить", callback_data=f"resume:restore:{resume_id}"),
+            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"resume:delete:{resume_id}")
         )
 
     # Third row: Back
@@ -281,7 +284,7 @@ async def my_resumes(message: Message, state: FSMContext):
     user = await User.find_one(User.telegram_id == telegram_id)
 
     if not user:
-        await message.answer("Пользователь не найден. Используйте /start")
+        await message.answer("Пользователь не найден. Используй /start")
         return
 
     try:
@@ -290,14 +293,14 @@ async def my_resumes(message: Message, state: FSMContext):
         if not resumes:
             await message.answer(
                 "📋 <b>Мои резюме</b>\n\n"
-                "У вас пока нет созданных резюме.\n"
-                "Создайте первое резюме, чтобы начать поиск работы!"
+                "У тебя пока нет созданных резюме.\n"
+                "Создай первое резюме, чтобы начать поиск работы!"
             )
             return
 
         # Show resume list with inline buttons
-        text = "📋 <b>Мои резюме</b>\n\n"
-        text += "Выберите резюме для просмотра деталей:\n\n"
+        text = f"📋 <b>Мои резюме</b> ({len(resumes)}/{MAX_RESUMES_PER_USER})\n\n"
+        text += "Выбери резюме для просмотра деталей:\n\n"
 
         builder = InlineKeyboardBuilder()
 
@@ -305,9 +308,17 @@ async def my_resumes(message: Message, state: FSMContext):
             status = resume.status.value if hasattr(resume.status, 'value') else str(resume.status)
             status_emoji = get_resume_status_emoji(status)
 
-            # Create button text with emoji and extended info
-            position = resume.desired_position or "Не указана должность"
-            salary_str = f"{resume.desired_salary:,}₽" if resume.desired_salary else "не указана"
+            # Support multi-positions
+            desired_positions = getattr(resume, 'desired_positions', None)
+            if desired_positions and len(desired_positions) > 0:
+                if len(desired_positions) > 2:
+                    position = f"{desired_positions[0]} +{len(desired_positions) - 1}"
+                else:
+                    position = ", ".join(desired_positions)
+            else:
+                position = resume.desired_position or "Не указана"
+
+            salary_str = f"{resume.desired_salary:,}₽" if resume.desired_salary else "-"
             button_text = f"{status_emoji} {position} | {salary_str} | {resume.city}"
             builder.row(
                 InlineKeyboardButton(
@@ -323,7 +334,7 @@ async def my_resumes(message: Message, state: FSMContext):
 
     except Exception as e:
         logger.error(f"Error fetching resumes: {e}")
-        await message.answer("Ошибка при загрузке резюме. Попробуйте позже.")
+        await message.answer("Ошибка при загрузке резюме. Попробуй позже.")
 
 
 @router.callback_query(F.data.startswith("resume:view:"))
@@ -376,7 +387,7 @@ async def return_to_resume_list(callback: CallbackQuery, state: FSMContext):
     user = await User.find_one(User.telegram_id == telegram_id)
 
     if not user:
-        await callback.message.edit_text("Пользователь не найден. Используйте /start")
+        await callback.message.edit_text("Пользователь не найден. Используй /start")
         return
 
     try:
@@ -385,12 +396,12 @@ async def return_to_resume_list(callback: CallbackQuery, state: FSMContext):
         if not resumes:
             await callback.message.edit_text(
                 "📋 <b>Мои резюме</b>\n\n"
-                "У вас пока нет созданных резюме."
+                "У тебя пока нет созданных резюме."
             )
             return
 
-        text = "📋 <b>Мои резюме</b>\n\n"
-        text += "Выберите резюме для просмотра деталей:\n\n"
+        text = f"📋 <b>Мои резюме</b> ({len(resumes)}/{MAX_RESUMES_PER_USER})\n\n"
+        text += "Выбери резюме для просмотра деталей:\n\n"
 
         builder = InlineKeyboardBuilder()
 
@@ -398,8 +409,17 @@ async def return_to_resume_list(callback: CallbackQuery, state: FSMContext):
             status = resume.status.value if hasattr(resume.status, 'value') else str(resume.status)
             status_emoji = get_resume_status_emoji(status)
 
-            position = resume.desired_position or "Не указана должность"
-            salary_str = f"{resume.desired_salary:,}₽" if resume.desired_salary else "не указана"
+            # Support multi-positions
+            desired_positions = getattr(resume, 'desired_positions', None)
+            if desired_positions and len(desired_positions) > 0:
+                if len(desired_positions) > 2:
+                    position = f"{desired_positions[0]} +{len(desired_positions) - 1}"
+                else:
+                    position = ", ".join(desired_positions)
+            else:
+                position = resume.desired_position or "Не указана"
+
+            salary_str = f"{resume.desired_salary:,}₽" if resume.desired_salary else "-"
             button_text = f"{status_emoji} {position} | {salary_str} | {resume.city}"
             builder.row(
                 InlineKeyboardButton(
@@ -428,7 +448,7 @@ async def archive_resume(callback: CallbackQuery, state: FSMContext):  # доб�
     # Show confirmation dialog
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="✅ Да, архивировать", callback_data=f"resume:archive_confirm:{resume_id}"),
+        InlineKeyboardButton(text="✅ Да, в архив", callback_data=f"resume:archive_confirm:{resume_id}"),
     )
     builder.row(
         InlineKeyboardButton(text="❌ Отмена", callback_data=f"resume:view:{resume_id}")
@@ -436,9 +456,10 @@ async def archive_resume(callback: CallbackQuery, state: FSMContext):  # доб�
 
     await edit_message_content(
         callback,
-        "📄 <b>Архивирование резюме</b>\n\n"
-        "Вы уверены, что хотите архивировать это резюме?\n\n"
-        "⚠️ Архивированное резюме будет скрыто из поиска, но вы сможете его восстановить позже.",
+        "🗄️ <b>Архивирование резюме</b>\n\n"
+        "Ты уверен, что хочешь архивировать это резюме?\n\n"
+        "⚠️ Архивированное резюме будет скрыто из поиска и удалено из канала.\n"
+        "Ты сможешь восстановить его позже.",
         reply_markup=builder.as_markup()
     )
     await callback.answer()
@@ -520,6 +541,66 @@ async def restore_resume(callback: CallbackQuery, state: FSMContext):  # доб�
     except Exception as e:
         logger.error(f"Error restoring resume {resume_id}: {e}")
         await callback.answer("❌ Ошибка при восстановлении", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("resume:delete:"))
+async def delete_resume(callback: CallbackQuery):
+    """Delete a resume with confirmation."""
+    resume_id = callback.data.split(":")[-1]
+
+    # Show confirmation dialog
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"resume:delete_confirm:{resume_id}"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"resume:view:{resume_id}")
+    )
+
+    await callback.message.edit_text(
+        "🗑 <b>Удаление резюме</b>\n\n"
+        "Ты уверен, что хочешь удалить это резюме?\n\n"
+        "⚠️ <b>Внимание!</b> Это действие необратимо.\n"
+        "Резюме будет удалено из канала и базы данных.",
+        reply_markup=builder.as_markup()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("resume:delete_confirm:"))
+async def confirm_delete_resume(callback: CallbackQuery):
+    """Confirm and delete resume."""
+    await callback.answer("🗑 Удаляю резюме...")
+
+    resume_id = callback.data.split(":")[-1]
+
+    try:
+        # Call backend API to delete resume
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                f"{settings.api_url}/resumes/{resume_id}"
+            )
+
+            if response.status_code == 204:
+                await callback.message.edit_text(
+                    "✅ <b>Резюме удалено</b>\n\n"
+                    "Резюме было удалено из базы и из канала."
+                )
+
+                # Show back to list button
+                builder = InlineKeyboardBuilder()
+                builder.row(
+                    InlineKeyboardButton(text="📋 Мои резюме", callback_data="resume:list")
+                )
+                await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
+
+                logger.info(f"Resume {resume_id} deleted by user {callback.from_user.id}")
+            else:
+                await callback.answer("❌ Ошибка при удалении", show_alert=True)
+
+    except Exception as e:
+        logger.error(f"Error deleting resume {resume_id}: {e}")
+        await callback.answer("❌ Ошибка при удалении", show_alert=True)
 
 
 @router.message(F.text == "📬 Мои отклики")

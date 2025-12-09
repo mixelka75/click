@@ -30,7 +30,7 @@ async def start_vacancy_creation(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
     user = await User.find_one(User.telegram_id == telegram_id)
 
-    if not user or user.role != UserRole.EMPLOYER:
+    if not user or not user.has_role(UserRole.EMPLOYER):
         await message.answer("Эта функция доступна только для работодателей.")
         return
 

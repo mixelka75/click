@@ -248,6 +248,9 @@ async def show_candidate_card(message: Message, state: FSMContext, index: int, e
         builder.row(
             InlineKeyboardButton(text="📧 Пригласить", callback_data=f"invite_candidate:{resume_id}")
         )
+        builder.row(
+            InlineKeyboardButton(text="🚨 Пожаловаться", callback_data=f"report_resume:{resume_id}")
+        )
 
         if edit and message.text:
             await message.edit_text(text, reply_markup=builder.as_markup())

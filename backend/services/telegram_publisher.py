@@ -377,10 +377,18 @@ class TelegramPublisher:
         # Get bot username from Telegram API
         bot_username = await self.get_bot_username()
 
-        builder.add(InlineKeyboardButton(
+        # Main action button
+        builder.row(InlineKeyboardButton(
             text="📬 Откликнуться" if entity_type == "vacancy" else "💼 Пригласить",
             url=f"https://t.me/{bot_username}?start={entity_type}_{entity_id}"
         ))
+
+        # Report button (smaller, secondary)
+        builder.row(InlineKeyboardButton(
+            text="🚨 Пожаловаться",
+            url=f"https://t.me/{bot_username}?start=report_{entity_type}_{entity_id}"
+        ))
+
         return builder.as_markup()
 
     async def publish_vacancy(self, vacancy: Vacancy) -> Optional[Publication]:

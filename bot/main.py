@@ -16,7 +16,7 @@ from backend.database import mongodb
 from bot.middlewares import StateResetMiddleware
 
 # Import handlers
-from bot.handlers.common import start, help_handler, statistics, favorites, profile, chat
+from bot.handlers.common import start, help_handler, statistics, favorites, profile, chat, complaint, moderation
 from bot.handlers.applicant import (
     resume_handlers,
     resume_creation,
@@ -154,6 +154,8 @@ async def main():
     dp.include_router(statistics.router)
     dp.include_router(profile.router)
     dp.include_router(chat.router)
+    dp.include_router(complaint.router)  # Complaint handlers
+    dp.include_router(moderation.router)  # Moderation handlers
 
     # Search handlers (menu buttons - MUST be before creation handlers!)
     dp.include_router(vacancy_search.router)  # For applicants

@@ -86,7 +86,8 @@ async def get_user_chats(user_id: str, include_archived: bool = False):
 
         if not include_archived:
             # Add condition to exclude archived chats
-            if user.role.value == "applicant":
+            current_role = user.current_role or user.role
+            if current_role.value == "applicant":
                 query["is_archived_by_applicant"] = False
             else:
                 query["is_archived_by_employer"] = False

@@ -23,7 +23,7 @@ from bot.keyboards.common import (
     get_industry_keyboard,
 )
 from bot.utils.cancel_handlers import handle_cancel_resume
-from shared.constants import INDUSTRIES, INDUSTRY_NAMES
+from shared.constants import INDUSTRIES, INDUSTRY_NAMES, LANGUAGES_WITH_FLAGS, LANGUAGE_LEVELS
 
 
 router = Router()
@@ -42,8 +42,10 @@ EDUCATION_LEVEL_OPTIONS = [
 async def proceed_to_courses(message: Message, state: FSMContext) -> None:
     """Move flow to courses section."""
     await message.answer(
-        "🎓 <b>Курсы и сертификаты</b>\n\n"
-        "Проходил какие-нибудь курсы повышения квалификации?",
+        "🎓 <b>Повышение квалификации, курсы</b>\n\n"
+        "Хочешь добавить свои курсы, сертификаты или дополнительные обучения?\n"
+        "Это может усилить твоё резюме и выделить тебя среди других кандидатов.\n"
+        "Добавить курсы или сертификаты?",
         reply_markup=get_yes_no_keyboard()
     )
     await state.set_state(ResumeCreationStates.add_courses)
@@ -60,16 +62,18 @@ async def proceed_to_skills(message: Message, state: FSMContext) -> None:
         # Use combined skills keyboard for multiple categories
         if len(position_categories) > 1:
             await message.answer(
-                "<b>Какие у тебя навыки?</b> 🛠\n"
-                "(можно выбрать несколько)",
+                "🛠 <b>Твои навыки</b>\n\n"
+                "Выбери те, которыми владеешь.\n"
+                "Это поможет работодателям понять, что ты умеешь.",
                 reply_markup=get_combined_skills_keyboard(position_categories, [])
             )
         else:
             # Single category
             category = position_categories[0] if position_categories else "other"
             await message.answer(
-                "<b>Какие у тебя навыки?</b> 🛠\n"
-                "(можно выбрать несколько)",
+                "🛠 <b>Твои навыки</b>\n\n"
+                "Выбери те, которыми владеешь.\n"
+                "Это поможет работодателям понять, что ты умеешь.",
                 reply_markup=get_skills_keyboard(category, [])
             )
         await state.set_state(ResumeCreationStates.skills)
@@ -82,7 +86,8 @@ async def proceed_to_languages(message: Message, state: FSMContext) -> None:
     """Move flow to languages section."""
     await message.answer(
         "🌍 <b>Знание языков</b>\n\n"
-        "Добавить информацию о владении языками?",
+        "Владеешь иностранными языками?\n"
+        "Если да — это может открыть двери к премиальным заведениям.",
         reply_markup=get_yes_no_keyboard()
     )
     await state.set_state(ResumeCreationStates.add_languages)
@@ -103,8 +108,14 @@ async def ask_add_work_experience(callback: CallbackQuery, state: FSMContext):
     if callback.data == "confirm:yes":
         await callback.message.answer(
             "💼 <b>Опыт работы</b>\n\n"
-            "Отлично! Расскажи о своём опыте.\n\n"
-            "<b>Название компании:</b>",
+            "Отлично! Давай добавим информацию о твоём опыте — это важная часть резюме.\n\n"
+            "Напиши название компании, где ты работал.\n"
+            "Это может быть юрлицо или название заведения с указанием локации.\n\n"
+            "Например:\n"
+            "• ООО «Ромашка»\n"
+            "• Ресторан «ГастроБар», Москва\n"
+            "• Кафе «Лаванда», Санкт-Петербург\n\n"
+            "Пиши в свободной форме — я всё пойму.",
             reply_markup=get_cancel_keyboard()
         )
         await state.set_state(ResumeCreationStates.work_experience_company)
@@ -112,6 +123,7 @@ async def ask_add_work_experience(callback: CallbackQuery, state: FSMContext):
         # Skip experience - go to education
         await callback.message.answer(
             "🎓 <b>Образование</b>\n\n"
+            "Ничего страшного, всё когда-то начинается!\n"
             "Добавим информацию об образовании?",
             reply_markup=get_yes_no_keyboard()
         )
@@ -142,7 +154,8 @@ async def process_work_company(message: Message, state: FSMContext):
     await state.update_data(temp_company=company)
 
     await message.answer(
-        "<b>Какая была должность?</b>",
+        "Отлично, понял! 🙌\n\n"
+        "<b>Теперь укажи, какую должность ты занимал в этой компании.</b>",
         reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.work_experience_position)
@@ -172,9 +185,10 @@ async def process_work_position(message: Message, state: FSMContext):
     await state.update_data(temp_position=position)
 
     await message.answer(
-        "<b>Когда начал работать?</b>\n"
-        "Формат: ММ.ГГГГ (например: 01.2020)\n"
-        "Или пропусти, если не помнишь точно",
+        "Хорошо! Теперь укажи период работы. 🗓\n\n"
+        "<b>Период работы — начало:</b>\n"
+        "Формат: ММ.ГГГГ (например: 01.2020)\n\n"
+        "Если не хочешь указывать — можешь нажать кнопку ниже и пропустить этот шаг.",
         reply_markup=get_skip_button()
     )
     await state.set_state(ResumeCreationStates.work_experience_start_date)
@@ -208,9 +222,10 @@ async def process_work_start_date_text(message: Message, state: FSMContext):
     await state.update_data(temp_start_date=start_date)
 
     await message.answer(
-        "<b>Когда закончил?</b>\n"
-        "Формат: ММ.ГГГГ\n"
-        "Или нажми кнопку, если работаешь до сих пор",
+        "<b>Период работы — окончание</b>\n\n"
+        "Если ты уже закончил работу, укажи дату в формате ММ.ГГГГ.\n"
+        "Если продолжаешь работать там сейчас — просто нажми кнопку «По настоящее время».\n"
+        "А если не хочешь указывать дату — нажми кнопку «Пропустить».",
         reply_markup=get_present_time_button()
     )
     await state.set_state(ResumeCreationStates.work_experience_end_date)
@@ -258,8 +273,9 @@ async def process_work_end_date_text(message: Message, state: FSMContext):
     await state.update_data(temp_end_date=end_date)
 
     await message.answer(
-        "<b>Опиши свои обязанности и достижения</b>\n"
-        "(можно пропустить)",
+        "Теперь давай укажем, какие обязанности у тебя были и чего ты добился на этой работе.\n"
+        "Это помогает работодателям лучше понять твой опыт.\n\n"
+        "Можешь написать в свободной форме или нажать кнопку ниже, чтобы пропустить.",
         reply_markup=get_skip_button()
     )
     await state.set_state(ResumeCreationStates.work_experience_responsibilities)
@@ -278,8 +294,9 @@ async def skip_work_end_date(callback: CallbackQuery, state: FSMContext):
     await state.update_data(temp_end_date="по настоящее время")
 
     await callback.message.answer(
-        "<b>Опиши свои обязанности и достижения</b>\n"
-        "(можно пропустить)",
+        "Теперь давай укажем, какие обязанности у тебя были и чего ты добился на этой работе.\n"
+        "Это помогает работодателям лучше понять твой опыт.\n\n"
+        "Можешь написать в свободной форме или нажать кнопку ниже, чтобы пропустить.",
         reply_markup=get_skip_button()
     )
     await state.set_state(ResumeCreationStates.work_experience_responsibilities)
@@ -306,8 +323,9 @@ async def process_work_responsibilities_text(message: Message, state: FSMContext
 
     # Go to industry selection with buttons
     await message.answer(
-        "<b>В какой сфере работала компания?</b> 🏢\n"
-        "Выбери из списка:",
+        "Отлично! Теперь давай укажем, в какой сфере работает эта компания.\n"
+        "Это поможет мне точнее сформировать твоё резюме.\n\n"
+        "<b>Напиши вручную или выбери один из вариантов ниже:</b>",
         reply_markup=get_industry_keyboard()
     )
     await state.set_state(ResumeCreationStates.work_experience_industry)
@@ -327,8 +345,9 @@ async def skip_work_responsibilities(callback: CallbackQuery, state: FSMContext)
 
     # Go to industry selection with buttons
     await callback.message.answer(
-        "<b>В какой сфере работала компания?</b> 🏢\n"
-        "Выбери из списка:",
+        "Отлично! Теперь давай укажем, в какой сфере работает эта компания.\n"
+        "Это поможет мне точнее сформировать твоё резюме.\n\n"
+        "<b>Напиши вручную или выбери один из вариантов ниже:</b>",
         reply_markup=get_industry_keyboard()
     )
     await state.set_state(ResumeCreationStates.work_experience_industry)
@@ -410,6 +429,7 @@ async def ask_more_work_experience(callback: CallbackQuery, state: FSMContext):
         # Move to education
         await callback.message.answer(
             "🎓 <b>Образование</b>\n\n"
+            "Отлично, опыт добавлен! Теперь перейдём к образованию.\n"
             "Добавим информацию об образовании?",
             reply_markup=get_yes_no_keyboard()
         )
@@ -439,7 +459,8 @@ async def ask_add_education(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.answer(
         "🎓 <b>Образование</b>\n\n"
-        "Выбери уровень:",
+        "Отлично! Теперь выбери свой уровень образования.\n"
+        "Это поможет сделать резюме более полным.",
         reply_markup=builder.as_markup()
     )
     await state.set_state(ResumeCreationStates.education_level)
@@ -460,7 +481,8 @@ async def process_education_level(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.answer(
         f"📚 {level}\n\n"
-        "<b>Название учебного заведения:</b>",
+        "Теперь напиши название учебного заведения, где ты обучался.\n"
+        "Можно указать полное или сокращённое название — как тебе удобнее.",
         reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.education_institution)
@@ -945,8 +967,9 @@ async def process_custom_skills(message: Message, state: FSMContext):
             keyboard = get_skills_keyboard(category, skills)
 
         await message.answer(
-            "<b>Какие у тебя навыки?</b> 🛠\n"
-            "(можно выбрать несколько)",
+            "🛠 <b>Твои навыки</b>\n\n"
+            "Выбери те, которыми владеешь.\n"
+            "Это поможет работодателям понять, что ты умеешь.",
             reply_markup=keyboard
         )
         await state.set_state(ResumeCreationStates.skills)
@@ -991,11 +1014,22 @@ async def ask_add_languages(callback: CallbackQuery, state: FSMContext):
         await proceed_to_about(callback.message, state)
         return
 
-    # Language input
+    # Show language selection keyboard with flags
+    builder = InlineKeyboardBuilder()
+    for idx, (flag, lang_name) in enumerate(LANGUAGES_WITH_FLAGS):
+        builder.add(InlineKeyboardButton(
+            text=f"{flag} {lang_name}",
+            callback_data=f"lang_select:{idx}"
+        ))
+    builder.adjust(2)  # 2 buttons per row
+    builder.row(InlineKeyboardButton(text="Добавить свой", callback_data="lang_select:custom"))
+    builder.row(InlineKeyboardButton(text="➖ Пропустить", callback_data="lang_select:skip"))
+
     await callback.message.answer(
-        "<b>Какой язык?</b>\n"
-        "Например: Английский, Немецкий",
-        reply_markup=get_back_cancel_keyboard()
+        "Отлично! 🌍\n"
+        "Чтобы было удобнее, выбери язык из списка ниже.\n"
+        "Если нужного языка нет — можешь написать свой вручную.",
+        reply_markup=builder.as_markup()
     )
     await state.set_state(ResumeCreationStates.language_name)
 
@@ -1005,15 +1039,119 @@ async def proceed_to_about(message: Message, state: FSMContext) -> None:
     await message.answer(
         "📝 <b>О себе</b>\n\n"
         "Расскажи немного о себе — что важно для работодателя?\n"
+        "Например: «Ответственный, пунктуальный, легко нахожу общий язык с гостями».\n\n"
         "(можно пропустить)",
         reply_markup=get_skip_button()
     )
     await state.set_state(ResumeCreationStates.about)
 
 
+async def _show_language_keyboard(message: Message, state: FSMContext) -> None:
+    """Show language selection keyboard with flags."""
+    builder = InlineKeyboardBuilder()
+    for idx, (flag, lang_name) in enumerate(LANGUAGES_WITH_FLAGS):
+        builder.add(InlineKeyboardButton(
+            text=f"{flag} {lang_name}",
+            callback_data=f"lang_select:{idx}"
+        ))
+    builder.adjust(2)  # 2 buttons per row
+    builder.row(InlineKeyboardButton(text="Добавить свой", callback_data="lang_select:custom"))
+    builder.row(InlineKeyboardButton(text="➖ Пропустить", callback_data="lang_select:skip"))
+
+    await message.answer(
+        "Отлично! 🌍\n"
+        "Чтобы было удобнее, выбери язык из списка ниже.\n"
+        "Если нужного языка нет — можешь написать свой вручную.",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(ResumeCreationStates.language_name)
+
+
+@router.callback_query(ResumeCreationStates.language_name, F.data.startswith("lang_select:"))
+async def process_language_selection(callback: CallbackQuery, state: FSMContext):
+    """Process language selection from buttons."""
+    await callback.answer()
+
+    action = callback.data.split(":", 1)[1]
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    if action == "skip":
+        await proceed_to_about(callback.message, state)
+        return
+
+    if action == "custom":
+        await callback.message.answer(
+            "<b>Какой язык?</b>\n"
+            "Напиши название языка:",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.custom_language_name)
+        return
+
+    # Selected language from list
+    idx = int(action)
+    if idx < len(LANGUAGES_WITH_FLAGS):
+        _, lang_name = LANGUAGES_WITH_FLAGS[idx]
+        await state.update_data(temp_language_name=lang_name)
+
+        # Show level selection
+        builder = InlineKeyboardBuilder()
+        for level in LANGUAGE_LEVELS:
+            builder.add(InlineKeyboardButton(
+                text=f"🔘 {level}",
+                callback_data=f"lang_level:{level}"
+            ))
+        builder.adjust(1)
+
+        await callback.message.answer(
+            "Теперь выбери уровень владения языком. 🌍",
+            reply_markup=builder.as_markup()
+        )
+        await state.set_state(ResumeCreationStates.language_level)
+
+
+@router.message(ResumeCreationStates.custom_language_name)
+async def process_custom_language_name(message: Message, state: FSMContext):
+    """Process custom language name input."""
+    text = (message.text or "").strip()
+
+    if text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if text == "◀️ Назад":
+        await _show_language_keyboard(message, state)
+        return
+
+    if len(text) < 2:
+        await message.answer("Название языка слишком короткое")
+        return
+
+    await state.update_data(temp_language_name=text)
+
+    # Show level selection
+    builder = InlineKeyboardBuilder()
+    for level in LANGUAGE_LEVELS:
+        builder.add(InlineKeyboardButton(
+            text=f"🔘 {level}",
+            callback_data=f"lang_level:{level}"
+        ))
+    builder.adjust(1)
+
+    await message.answer(
+        "Теперь выбери уровень владения языком. 🌍",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(ResumeCreationStates.language_level)
+
+
 @router.message(ResumeCreationStates.language_name)
 async def process_language_name(message: Message, state: FSMContext):
-    """Process language name."""
+    """Process language name (text input fallback)."""
     text = (message.text or "").strip()
 
     if text == "🚫 Отменить создание":
@@ -1023,7 +1161,8 @@ async def process_language_name(message: Message, state: FSMContext):
     if text == "◀️ Назад":
         await message.answer(
             "🌍 <b>Знание языков</b>\n\n"
-            "Добавить информацию о владении языками?",
+            "Владеешь иностранными языками?\n"
+            "Если да — это может открыть двери к премиальным заведениям.",
             reply_markup=get_yes_no_keyboard()
         )
         await state.set_state(ResumeCreationStates.add_languages)
@@ -1035,19 +1174,17 @@ async def process_language_name(message: Message, state: FSMContext):
 
     await state.update_data(temp_language_name=text)
 
-    # Language level buttons
-    from shared.constants import LANGUAGE_LEVELS
-
+    # Show level selection
     builder = InlineKeyboardBuilder()
     for level in LANGUAGE_LEVELS:
         builder.add(InlineKeyboardButton(
-            text=level,
+            text=f"🔘 {level}",
             callback_data=f"lang_level:{level}"
         ))
     builder.adjust(1)
 
     await message.answer(
-        f"<b>Уровень владения {text}:</b>",
+        "Теперь выбери уровень владения языком. 🌍",
         reply_markup=builder.as_markup()
     )
     await state.set_state(ResumeCreationStates.language_level)
@@ -1096,12 +1233,8 @@ async def process_more_languages(callback: CallbackQuery, state: FSMContext):
         pass
 
     if callback.data == "confirm:yes":
-        await callback.message.answer(
-            "<b>Какой язык?</b>\n"
-            "Например: Английский, Немецкий",
-            reply_markup=get_back_cancel_keyboard()
-        )
-        await state.set_state(ResumeCreationStates.language_name)
+        # Show language keyboard with flags
+        await _show_language_keyboard(callback.message, state)
     else:
         await proceed_to_about(callback.message, state)
 
@@ -1131,12 +1264,17 @@ async def process_about_text(message: Message, state: FSMContext):
     # Proceed to photos (in resume_finalize.py)
     await message.answer(
         "📸 <b>Фотография</b>\n\n"
-        "Загрузи своё фото — это обязательно для резюме!\n\n"
-        "💡 <i>Советы:</i>\n"
-        "• Чёткое фото лица\n"
-        "• Нейтральный фон\n"
-        "• Деловой или опрятный вид\n"
-        "• Можно добавить до 5 фото"
+        "Отлично! Остался последний штрих.\n"
+        "Добавь, пожалуйста, фото для резюме — это поможет работодателям "
+        "быстрее узнать тебя и повышает шанс получить отклик.\n\n"
+        "📸 <b>Небольшая рекомендация по фото</b>\n"
+        "Чтобы произвести хорошее впечатление на работодателя, выбирай фото, где ты:\n"
+        "• выглядишь опрятно и аккуратно\n"
+        "• без лишних фильтров и эффектов\n"
+        "• в нейтральной обстановке\n"
+        "• в одежде, подходящей для работы в HoReCa\n"
+        "• улыбаешься или выглядишь доброжелательно\n\n"
+        "Отправляй, как будешь готов!"
     )
     await state.set_state(ResumeCreationStates.photo)
 
@@ -1156,11 +1294,16 @@ async def skip_about(callback: CallbackQuery, state: FSMContext):
     # Proceed to photos (in resume_finalize.py)
     await callback.message.answer(
         "📸 <b>Фотография</b>\n\n"
-        "Загрузи своё фото — это обязательно для резюме!\n\n"
-        "💡 <i>Советы:</i>\n"
-        "• Чёткое фото лица\n"
-        "• Нейтральный фон\n"
-        "• Деловой или опрятный вид\n"
-        "• Можно добавить до 5 фото"
+        "Отлично! Остался последний штрих.\n"
+        "Добавь, пожалуйста, фото для резюме — это поможет работодателям "
+        "быстрее узнать тебя и повышает шанс получить отклик.\n\n"
+        "📸 <b>Небольшая рекомендация по фото</b>\n"
+        "Чтобы произвести хорошее впечатление на работодателя, выбирай фото, где ты:\n"
+        "• выглядишь опрятно и аккуратно\n"
+        "• без лишних фильтров и эффектов\n"
+        "• в нейтральной обстановке\n"
+        "• в одежде, подходящей для работы в HoReCa\n"
+        "• улыбаешься или выглядишь доброжелательно\n\n"
+        "Отправляй, как будешь готов!"
     )
     await state.set_state(ResumeCreationStates.photo)

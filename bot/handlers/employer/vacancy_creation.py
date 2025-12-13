@@ -86,8 +86,8 @@ async def process_position(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.message.edit_text(
             f"✅ Должность: <b>{position}</b>\n\n"
-            "Теперь расскажите о вашей компании.\n\n"
-            "<b>Введите название компании:</b>"
+            "Отлично! Теперь расскажите о вашем заведении.\n\n"
+            "<b>Как называется ваша компания?</b>"
         )
         await state.set_state(VacancyCreationStates.company_name)
 
@@ -147,8 +147,8 @@ async def process_custom_position(message: Message, state: FSMContext):
     else:
         await message.answer(
             f"✅ Должность: <b>{position}</b>\n\n"
-            "Теперь расскажите о вашей компании.\n\n"
-            "<b>Введите название компании:</b>"
+            "Отлично! Теперь расскажите о вашем заведении.\n\n"
+            "<b>Как называется ваша компания?</b>"
         )
 
         await state.set_state(VacancyCreationStates.company_name)
@@ -174,8 +174,8 @@ async def process_cuisine_toggle(callback: CallbackQuery, state: FSMContext):
         cuisines_text = ", ".join(cuisines)
         await callback.message.edit_text(
             f"✅ Типы кухонь: <b>{cuisines_text}</b>\n\n"
-            "Теперь расскажите о компании.\n\n"
-            "<b>Введите название вашей компании:</b>",
+            "Отлично! Теперь расскажите о вашем заведении.\n\n"
+            "<b>Как называется ваша компания?</b>",
             reply_markup=None
         )
         await state.set_state(VacancyCreationStates.company_name)
@@ -273,8 +273,8 @@ async def process_cuisines_done(callback: CallbackQuery, state: FSMContext):
     cuisines_text = ", ".join(cuisines)
     await callback.message.edit_text(
         f"✅ Типы кухонь: <b>{cuisines_text}</b>\n\n"
-        "Теперь расскажите о вашей компании.\n\n"
-        "<b>Введите название компании:</b>",
+        "Отлично! Теперь расскажите о вашем заведении.\n\n"
+        "<b>Как называется ваша компания?</b>",
         reply_markup=None
     )
     await state.set_state(VacancyCreationStates.company_name)
@@ -347,8 +347,9 @@ async def process_company_type(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text(
         "✅ Тип заведения выбран\n\n"
-        "<b>Опишите вашу компанию в нескольких предложениях:</b>\n"
-        "(концепция, атмосфера, целевая аудитория)",
+        "<b>Расскажите о вашем заведении:</b>\n"
+        "Какая концепция, атмосфера, целевая аудитория?\n"
+        "Это поможет кандидатам лучше понять, подходит ли им это место.",
         reply_markup=None
     )
     await state.set_state(VacancyCreationStates.company_description)
@@ -361,8 +362,8 @@ async def process_company_description(message: Message, state: FSMContext):
 
     if len(description) < 10:
         await message.answer(
-            "❌ Описание слишком короткое.\n"
-            "Расскажите подробнее о вашей компании (минимум 10 символов):"
+            "Описание слишком короткое.\n"
+            "Расскажите подробнее о вашем заведении (минимум 10 символов):"
         )
         return
 
@@ -370,7 +371,7 @@ async def process_company_description(message: Message, state: FSMContext):
 
     await message.answer(
         "✅ Описание сохранено\n\n"
-        "<b>Выберите размер компании:</b>",
+        "<b>Какой размер вашей компании?</b>",
         reply_markup=get_company_size_keyboard()
     )
     await state.set_state(VacancyCreationStates.company_size)
@@ -408,9 +409,8 @@ async def process_company_size(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text(
         "✅ Размер компании указан\n\n"
-        "<b>Есть ли у компании сайт?</b>\n"
-        "Если да, введите URL.\n"
-        "Если нет, нажмите кнопку ниже:",
+        "<b>Есть ли у вашей компании сайт?</b>\n"
+        "Введите ссылку или пропустите этот шаг:",
         reply_markup=get_skip_keyboard("website")
     )
     await state.set_state(VacancyCreationStates.company_website)
@@ -475,7 +475,7 @@ async def ask_city(message: Message, state: FSMContext):
     """Ask for city selection."""
     await message.answer(
         "📍 <b>Местоположение</b>\n\n"
-        "В каком городе находится ваше заведение?",
+        "В каком городе находится вакансия?",
         reply_markup=get_city_selection_keyboard()
     )
     await state.set_state(VacancyCreationStates.city)
@@ -555,10 +555,10 @@ async def process_city_custom(message: Message, state: FSMContext):
 async def ask_metro(message: Message, state: FSMContext, city: str):
     """Ask for metro stations."""
     await message.answer(
-        f"🚇 <b>Станции метро</b>\n\n"
+        f"🚇 <b>Ближайшие станции метро</b>\n\n"
         f"Город: {city}\n\n"
-        "Укажите ближайшие станции метро.\n"
-        "Можно ввести несколько через запятую.\n\n"
+        "Укажите станции метро рядом с вашим заведением.\n"
+        "Можно несколько через запятую.\n\n"
         "Например: Тверская, Пушкинская",
         reply_markup=get_skip_keyboard("metro")
     )
@@ -603,8 +603,8 @@ async def finish_location(message: Message, state: FSMContext):
 
     await message.answer(
         f"✅ Местоположение сохранено\n{location_text}\n\n"
-        "Отлично! Базовая информация о вакансии готова.\n"
-        "Теперь перейдём к условиям работы."
+        "Отлично! Основная информация заполнена.\n"
+        "Теперь перейдём к условиям работы и зарплате."
     )
 
     from bot.handlers.employer.vacancy_completion import ask_salary_min

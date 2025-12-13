@@ -73,6 +73,7 @@ class ResumeCreationStates(StatesGroup):
     # === Languages ===
     add_languages = State()
     language_name = State()
+    custom_language_name = State()  # Manual language entry
     language_level = State()
     language_more = State()
 

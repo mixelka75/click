@@ -17,23 +17,21 @@ from bot.middlewares import StateResetMiddleware
 
 # Import handlers
 from bot.handlers.common import start, help_handler, statistics, favorites, profile, chat, complaint, moderation
-from bot.handlers.applicant import (
-    resume_handlers,
-    resume_creation,
-    resume_completion,
-    resume_finalize,
-    vacancy_search,
-    recommendations as applicant_recommendations
-)
-from bot.handlers.employer import (
-    vacancy_handlers,
-    vacancy_creation,
-    vacancy_completion,
-    vacancy_finalize,
-    resume_search,
-    response_management,
-    recommendations as employer_recommendations
-)
+# Replace package-level imports with direct module imports to avoid circular import issues
+import bot.handlers.applicant.resume_handlers as resume_handlers
+import bot.handlers.applicant.resume_creation as resume_creation
+import bot.handlers.applicant.resume_completion as resume_completion
+import bot.handlers.applicant.resume_finalize as resume_finalize
+import bot.handlers.applicant.vacancy_search as vacancy_search
+import bot.handlers.applicant.recommendations as applicant_recommendations
+
+import bot.handlers.employer.vacancy_handlers as vacancy_handlers
+import bot.handlers.employer.vacancy_creation as vacancy_creation
+import bot.handlers.employer.vacancy_completion as vacancy_completion
+import bot.handlers.employer.vacancy_finalize as vacancy_finalize
+import bot.handlers.employer.resume_search as resume_search
+import bot.handlers.employer.response_management as response_management
+import bot.handlers.employer.recommendations as employer_recommendations
 
 
 # Configure logging
@@ -199,4 +197,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
+        pass

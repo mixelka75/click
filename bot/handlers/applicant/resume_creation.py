@@ -55,9 +55,8 @@ async def process_full_name(message: Message, state: FSMContext):
 
     await state.update_data(full_name=full_name)
     await message.answer(
-        f"Отлично, {full_name.split()[0]}! 👋\n\n"
         "<b>Укажи своё гражданство</b>\n"
-        "Например: Россия, Беларусь, Казахстан",
+        "Например: Россия",
         reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.citizenship)
@@ -88,8 +87,8 @@ async def process_citizenship(message: Message, state: FSMContext):
 
     await state.update_data(citizenship=citizenship)
     await message.answer(
-        "<b>Когда у тебя день рождения?</b> 🎂\n"
-        "Формат: ДД.ММ.ГГГГ (например: 15.08.1995)",
+        "<b>Введи свою дату рождения</b>\n"
+        "Формат: например: 01.01.2000",
         reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.birth_date)
@@ -143,8 +142,9 @@ async def process_birth_date(message: Message, state: FSMContext):
 
     # Move to city selection with buttons
     await message.answer(
-        "<b>В каком городе ищешь работу?</b> 🏙\n"
-        "Выбери из списка или укажи свой:",
+        "Отлично! 😎\n"
+        "Тогда двигаемся дальше.\n\n"
+        "<b>В каком городе ты находишься?</b>",
         reply_markup=get_city_selection_keyboard()
     )
     await state.set_state(ResumeCreationStates.city)
@@ -183,7 +183,9 @@ async def process_city_selection(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.answer(
         f"📍 Город: {city_value}\n\n"
-        "<b>Готов к переезду в другой город?</b>",
+        "<b>Готов ли ты переехать в другой город?</b>\n"
+        "Если да — я смогу подбирать для тебя интересные вакансии "
+        "не только в твоём городе, но и по всей России.",
         reply_markup=get_yes_no_keyboard()
     )
     await state.set_state(ResumeCreationStates.ready_to_relocate)
@@ -214,7 +216,9 @@ async def process_city_text(message: Message, state: FSMContext):
     await state.update_data(city=city)
     await message.answer(
         f"📍 Город: {city}\n\n"
-        "<b>Готов к переезду в другой город?</b>",
+        "<b>Готов ли ты переехать в другой город?</b>\n"
+        "Если да — я смогу подбирать для тебя интересные вакансии "
+        "не только в твоём городе, но и по всей России.",
         reply_markup=get_yes_no_keyboard()
     )
     await state.set_state(ResumeCreationStates.ready_to_relocate)
@@ -244,7 +248,9 @@ async def process_city_custom(message: Message, state: FSMContext):
     await state.update_data(city=city)
     await message.answer(
         f"📍 Город: {city}\n\n"
-        "<b>Готов к переезду в другой город?</b>",
+        "<b>Готов ли ты переехать в другой город?</b>\n"
+        "Если да — я смогу подбирать для тебя интересные вакансии "
+        "не только в твоём городе, но и по всей России.",
         reply_markup=get_yes_no_keyboard()
     )
     await state.set_state(ResumeCreationStates.ready_to_relocate)
@@ -268,8 +274,10 @@ async def process_relocate(callback: CallbackQuery, state: FSMContext):
     # Skip business trips question - go directly to phone
     await callback.message.answer(
         f"{'✅ Готов к переезду' if ready else '📍 Не готов к переезду'}\n\n"
-        "<b>Укажи свой номер телефона</b> 📱\n"
-        "Можно в формате +7... или 8...",
+        "Хорошо, двигаемся дальше! 📱\n\n"
+        "Мне понадобится твой <b>номер телефона</b> — работодатели смогут "
+        "связаться с тобой, когда придёт время и появятся подходящие вакансии.\n\n"
+        "Укажи номер в формате: +79001234567 или 89001234567",
         reply_markup=get_back_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.phone)
@@ -351,7 +359,9 @@ async def process_phone(message: Message, state: FSMContext):
 
     skip_msg = await message.answer(
         "<b>Укажи свой email</b> 📧\n"
-        "(необязательно — можешь пропустить)",
+        "(или нажми кнопку ниже, чтобы пропустить)\n\n"
+        "Email лишним не будет — он дополняет резюме,\n"
+        "а некоторые работодатели предпочитают писать именно на почту.",
         reply_markup=get_skip_button()
     )
     await state.update_data(email_skip_message_id=skip_msg.message_id)
@@ -408,7 +418,12 @@ async def process_email_text(message: Message, state: FSMContext):
         return
 
     await state.update_data(email=email)
-    await _proceed_to_telegram_confirm(message, state)
+
+    # Auto-save telegram from user profile
+    if message.from_user and message.from_user.username:
+        await state.update_data(detected_telegram=f"@{message.from_user.username}")
+
+    await _proceed_to_position_selection(message, state)
 
 
 @router.callback_query(ResumeCreationStates.email, F.data == "skip")
@@ -421,7 +436,12 @@ async def skip_email(callback: CallbackQuery, state: FSMContext):
         pass
 
     await state.update_data(email=None)
-    await _proceed_to_telegram_confirm(callback.message, state, from_callback=True)
+
+    # Auto-save telegram from user profile
+    if callback.from_user and callback.from_user.username:
+        await state.update_data(detected_telegram=f"@{callback.from_user.username}")
+
+    await _proceed_to_position_selection(callback.message, state)
 
 
 async def _proceed_to_telegram_confirm(message: Message, state: FSMContext, from_callback: bool = False):
@@ -553,8 +573,8 @@ async def _proceed_to_position_selection(message: Message, state: FSMContext):
     )
 
     await message.answer(
-        "<b>На какую должность ты претендуешь?</b> 💼\n\n"
-        "Выбери категорию — потом сможешь добавить ещё:",
+        "<b>Какую должность ты ищешь?</b>\n\n"
+        "Выбери категории, чтобы я мог подобрать вакансии максимально точно.",
         reply_markup=get_position_categories_keyboard()
     )
     await state.set_state(ResumeCreationStates.position_category)
@@ -817,9 +837,9 @@ async def positions_confirmed(callback: CallbackQuery, state: FSMContext):
     else:
         # Skip cuisines, go to salary
         await callback.message.answer(
-            "<b>Какую зарплату хочешь получать?</b> 💰\n"
-            "Укажи сумму в рублях (например: 80000)\n"
-            "Или пропусти, если зарплата по договорённости",
+            "<b>Какую зарплату ты хочешь получать?</b>\n\n"
+            "Просто укажи сумму в рублях, например: 80000.\n"
+            "Если не хочешь указывать сейчас — можешь нажать кнопку ниже и пропустить этот шаг.",
             reply_markup=get_skip_button()
         )
         await state.set_state(ResumeCreationStates.desired_salary)
@@ -846,9 +866,9 @@ async def process_cuisines(callback: CallbackQuery, state: FSMContext):
 
         await callback.message.answer(
             f"🍳 Кухни: {cuisines_text}\n\n"
-            "<b>Какую зарплату хочешь получать?</b> 💰\n"
-            "Укажи сумму в рублях (например: 80000)\n"
-            "Или пропусти, если зарплата по договорённости",
+            "<b>Какую зарплату ты хочешь получать?</b>\n\n"
+            "Просто укажи сумму в рублях, например: 80000.\n"
+            "Если не хочешь указывать сейчас — можешь нажать кнопку ниже и пропустить этот шаг.",
             reply_markup=get_skip_button()
         )
         await state.set_state(ResumeCreationStates.desired_salary)
@@ -961,9 +981,9 @@ async def cuisines_done(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.answer(
         f"🍳 Кухни: {cuisines_text}\n\n"
-        "<b>Какую зарплату хочешь получать?</b> 💰\n"
-        "Укажи сумму в рублях (например: 80000)\n"
-        "Или пропусти, если зарплата по договорённости",
+        "<b>Какую зарплату ты хочешь получать?</b>\n\n"
+        "Просто укажи сумму в рублях, например: 80000.\n"
+        "Если не хочешь указывать сейчас — можешь нажать кнопку ниже и пропустить этот шаг.",
         reply_markup=get_skip_button()
     )
     await state.set_state(ResumeCreationStates.desired_salary)
@@ -1024,8 +1044,9 @@ async def process_desired_salary(message: Message, state: FSMContext):
 
     await message.answer(
         f"💰 Желаемая зарплата: {salary:,} ₽".replace(",", " ") + "\n\n"
+        "Хорошо! Теперь разберёмся с твоим графиком. 🕒\n\n"
         "<b>Какой график работы тебе подходит?</b>\n"
-        "(можно выбрать несколько)",
+        "(можно выбрать несколько вариантов)",
         reply_markup=get_work_schedule_keyboard([])
     )
     await state.set_state(ResumeCreationStates.work_schedule)
@@ -1046,8 +1067,9 @@ async def skip_salary(callback: CallbackQuery, state: FSMContext):
     from bot.keyboards.positions import get_work_schedule_keyboard
 
     await callback.message.answer(
+        "Хорошо! Теперь разберёмся с твоим графиком. 🕒\n\n"
         "<b>Какой график работы тебе подходит?</b>\n"
-        "(можно выбрать несколько)",
+        "(можно выбрать несколько вариантов)",
         reply_markup=get_work_schedule_keyboard([])
     )
     await state.set_state(ResumeCreationStates.work_schedule)
@@ -1071,9 +1093,9 @@ async def process_work_schedule(callback: CallbackQuery, state: FSMContext):
 
         # Proceed to experience (in resume_completion.py)
         await callback.message.answer(
-            "Отлично! Основная информация заполнена ✅\n\n"
-            "Теперь давай добавим информацию об опыте работы.\n\n"
-            "<b>Есть ли у тебя опыт работы?</b>",
+            "<b>Добавим опыт работы?</b> 📘\n\n"
+            "Это поможет работодателям лучше оценить твои навыки "
+            "и повысит шансы на отклик.",
             reply_markup=get_yes_no_keyboard()
         )
         await state.set_state(ResumeCreationStates.add_work_experience)

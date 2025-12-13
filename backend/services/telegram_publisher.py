@@ -5,7 +5,7 @@ Service for publishing resumes and vacancies to Telegram channels.
 from typing import Optional
 from datetime import datetime
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LinkPreviewOptions
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LinkPreviewOptions, InputMediaPhoto
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 
@@ -257,13 +257,8 @@ class TelegramPublisher:
         if resume.ready_to_relocate:
             lines.append("✈️ Готов к переезду")
 
-        # Contacts
-        if resume.phone or resume.email:
-            lines.append(f"\n📞 <b>КОНТАКТЫ</b>")
-            if resume.phone:
-                lines.append(f"Телефон: {resume.phone}")
-            if resume.email:
-                lines.append(f"Email: {resume.email}")
+        # Contacts removed from channel publication for privacy
+        # Contact info is only visible after employer clicks "Пригласить"
 
         # Desired position
         lines.append(f"\n💼 <b>ЖЕЛАЕМАЯ ДОЛЖНОСТЬ</b>")
@@ -455,17 +450,51 @@ class TelegramPublisher:
             # Create keyboard
             keyboard = await self.get_callback_keyboard(str(resume.id), "resume")
 
-            # Send message with photo if available
-            if resume.photo_file_id:
+            # Send message with photos if available
+            photo_ids = getattr(resume, 'photo_file_ids', None) or []
+            if not photo_ids and resume.photo_file_id:
+                photo_ids = [resume.photo_file_id]
+
+            if len(photo_ids) > 1:
+                # Multiple photos - send as media group
+                media_group = []
+                for i, photo_id in enumerate(photo_ids):
+                    if i == 0:
+                        # First photo gets the caption
+                        media_group.append(InputMediaPhoto(
+                            media=photo_id,
+                            caption=message_text,
+                            parse_mode="HTML"
+                        ))
+                    else:
+                        media_group.append(InputMediaPhoto(media=photo_id))
+
+                messages = await self.bot.send_media_group(
+                    chat_id=channel,
+                    media=media_group
+                )
+                message = messages[0]  # Use first message for publication record
+
+                # Send keyboard as separate message
+                await self.bot.send_message(
+                    chat_id=channel,
+                    text="👆 Резюме выше",
+                    reply_markup=keyboard
+                )
+                logger.info(f"Published resume {resume.id} with {len(photo_ids)} photos to channel {channel}")
+
+            elif len(photo_ids) == 1:
+                # Single photo
                 message = await self.bot.send_photo(
                     chat_id=channel,
-                    photo=resume.photo_file_id,
+                    photo=photo_ids[0],
                     caption=message_text,
                     parse_mode="HTML",
                     reply_markup=keyboard
                 )
                 logger.info(f"Published resume {resume.id} with photo to channel {channel}")
             else:
+                # No photos
                 message = await self.bot.send_message(
                     chat_id=channel,
                     text=message_text,

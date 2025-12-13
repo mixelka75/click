@@ -108,13 +108,15 @@ async def start_resume_creation(message: Message, state: FSMContext):
 
     welcome_text = (
         "📝 <b>Создание резюме</b>\n\n"
-        "Отлично! Давай создадим твоё резюме.\n"
-        "Я буду задавать вопросы шаг за шагом.\n\n"
+        "Хммм… 🤔 Вижу, ты решил создать ещё одно резюме.\n"
+        "Отлично! Тогда давай создадим его с нуля.\n\n"
+        "Я задам тебе несколько вопросов, чтобы собрать всю нужную информацию.\n"
+        "Не переживай — всё просто и быстро.\n\n"
         "Ты можешь в любой момент:\n"
-        "• Использовать кнопку '🚫 Отменить создание' для отмены\n"
-        "• Пропустить необязательные поля\n\n"
-        "Начнём с основной информации.\n\n"
-        "<b>Как тебя зовут?</b> (ФИО полностью)"
+        "• нажать 🚫 Отменить создание\n"
+        "• пропустить необязательные шаги\n\n"
+        "Ну что, начнём?\n\n"
+        "<b>Как тебя зовут?</b> Напиши ФИО полностью"
     )
 
     await message.answer(welcome_text, reply_markup=get_cancel_keyboard())
@@ -557,13 +559,31 @@ async def delete_resume(callback: CallbackQuery):
         InlineKeyboardButton(text="❌ Отмена", callback_data=f"resume:view:{resume_id}")
     )
 
-    await callback.message.edit_text(
+    confirmation_text = (
         "🗑 <b>Удаление резюме</b>\n\n"
-        "Ты уверен, что хочешь удалить это резюме?\n\n"
-        "⚠️ <b>Внимание!</b> Это действие необратимо.\n"
-        "Резюме будет удалено из канала и базы данных.",
-        reply_markup=builder.as_markup()
+        "Понял тебя.\n"
+        "Если ты действительно хочешь удалить своё резюме, "
+        "я могу сделать это прямо сейчас.\n\n"
+        "После удаления:\n"
+        "• работодатели больше не смогут его видеть\n"
+        "• оно исчезнет из раздела «Мои резюме»\n"
+        "• восстановить его будет невозможно, но можно создать новое\n\n"
+        "<b>Подтвердить удаление?</b>"
     )
+
+    # Try to edit text, if fails (photo message) - delete and send new
+    try:
+        await callback.message.edit_text(
+            confirmation_text,
+            reply_markup=builder.as_markup()
+        )
+    except Exception:
+        # Message has photo, delete it and send new text message
+        await callback.message.delete()
+        await callback.message.answer(
+            confirmation_text,
+            reply_markup=builder.as_markup()
+        )
     await callback.answer()
 
 
@@ -582,17 +602,29 @@ async def confirm_delete_resume(callback: CallbackQuery):
             )
 
             if response.status_code == 204:
-                await callback.message.edit_text(
-                    "✅ <b>Резюме удалено</b>\n\n"
-                    "Резюме было удалено из базы и из канала."
-                )
-
                 # Show back to list button
                 builder = InlineKeyboardBuilder()
                 builder.row(
                     InlineKeyboardButton(text="📋 Мои резюме", callback_data="resume:list")
                 )
-                await callback.message.edit_reply_markup(reply_markup=builder.as_markup())
+
+                success_text = (
+                    "✅ <b>Резюме удалено</b>\n\n"
+                    "Резюме было удалено из базы и из канала."
+                )
+
+                # Try to edit text, if fails - delete and send new
+                try:
+                    await callback.message.edit_text(
+                        success_text,
+                        reply_markup=builder.as_markup()
+                    )
+                except Exception:
+                    await callback.message.delete()
+                    await callback.message.answer(
+                        success_text,
+                        reply_markup=builder.as_markup()
+                    )
 
                 logger.info(f"Resume {resume_id} deleted by user {callback.from_user.id}")
             else:
@@ -663,6 +695,47 @@ async def my_responses(message: Message):
 # RESUME EDITING
 # ============================================================================
 
+def get_edit_sections_keyboard(resume_id: str) -> InlineKeyboardMarkup:
+    """Создать клавиатуру с разделами для редактирования."""
+    builder = InlineKeyboardBuilder()
+
+    # Личные данные
+    builder.row(
+        InlineKeyboardButton(text="👤 Личные данные", callback_data=f"edit_resume_field:personal:{resume_id}")
+    )
+    # Должность и зарплата
+    builder.row(
+        InlineKeyboardButton(text="💼 Должность", callback_data=f"edit_resume_field:position:{resume_id}"),
+        InlineKeyboardButton(text="💰 Зарплата", callback_data=f"edit_resume_field:salary:{resume_id}")
+    )
+    # Опыт и образование
+    builder.row(
+        InlineKeyboardButton(text="💼 Опыт работы", callback_data=f"edit_resume_field:experience:{resume_id}"),
+        InlineKeyboardButton(text="🎓 Образование", callback_data=f"edit_resume_field:education:{resume_id}")
+    )
+    # Навыки и курсы
+    builder.row(
+        InlineKeyboardButton(text="🎯 Навыки", callback_data=f"edit_resume_field:skills:{resume_id}"),
+        InlineKeyboardButton(text="📜 Курсы", callback_data=f"edit_resume_field:courses:{resume_id}")
+    )
+    # Языки и фото
+    builder.row(
+        InlineKeyboardButton(text="🌍 Языки", callback_data=f"edit_resume_field:languages:{resume_id}"),
+        InlineKeyboardButton(text="📸 Фото", callback_data=f"edit_resume_field:photo:{resume_id}")
+    )
+    # Контакты и о себе
+    builder.row(
+        InlineKeyboardButton(text="📞 Контакты", callback_data=f"edit_resume_field:contacts:{resume_id}"),
+        InlineKeyboardButton(text="📝 О себе", callback_data=f"edit_resume_field:about:{resume_id}")
+    )
+    # Отмена
+    builder.row(
+        InlineKeyboardButton(text="❌ Готово", callback_data=f"resume:view:{resume_id}")
+    )
+
+    return builder.as_markup()
+
+
 @router.callback_query(F.data.startswith("resume:edit:"))
 async def start_resume_edit(callback: CallbackQuery, state: FSMContext):
     """Start resume editing - show field selection menu."""
@@ -674,7 +747,7 @@ async def start_resume_edit(callback: CallbackQuery, state: FSMContext):
         async with httpx.AsyncClient(timeout=10.0) as client:
             headers = await build_auth_headers(callback.from_user.id, state)
             if not headers:
-                await callback.message.answer("❌ Нет авторизации. Используйте /start")
+                await callback.message.answer("❌ Нет авторизации. Используй /start")
                 return
             response = await client.get(
                 f"{settings.api_url}/resumes/{resume_id}",
@@ -692,44 +765,27 @@ async def start_resume_edit(callback: CallbackQuery, state: FSMContext):
 
             # Show field selection menu
             text = (
-                "✏️ <b>Редактирование резюме</b>\n\n"
-                "Выберите поле для редактирования:"
+                "✏️ <b>Хорошо! Давай внесём изменения в твоё резюме.</b>\n\n"
+                "Выбери, что именно хочешь исправить, и я всё обновлю.\n\n"
+                "Ты можешь изменить любую часть:\n"
+                "• личные данные\n"
+                "• опыт работы\n"
+                "• образование\n"
+                "• навыки\n"
+                "• фото\n"
+                "• желаемую должность и зарплату\n\n"
+                "<b>Готов? Выбери раздел:</b>"
             )
 
-            builder = InlineKeyboardBuilder()
-
-            # Basic fields
-            builder.row(
-                InlineKeyboardButton(text="💰 Желаемая зарплата", callback_data=f"edit_resume_field:salary:{resume_id}"),
-            )
-            builder.row(
-                InlineKeyboardButton(text="📍 Город", callback_data=f"edit_resume_field:city:{resume_id}"),
-                InlineKeyboardButton(text="💼 Должность", callback_data=f"edit_resume_field:position:{resume_id}")
-            )
-            builder.row(
-                InlineKeyboardButton(text="🎯 Навыки", callback_data=f"edit_resume_field:skills:{resume_id}"),
-                InlineKeyboardButton(text="📞 Телефон", callback_data=f"edit_resume_field:phone:{resume_id}")
-            )
-            builder.row(
-                InlineKeyboardButton(text="✉️ Email", callback_data=f"edit_resume_field:email:{resume_id}"),
-                InlineKeyboardButton(text="📝 О себе", callback_data=f"edit_resume_field:about:{resume_id}")
-            )
-            builder.row(
-                InlineKeyboardButton(text="📸 Фото", callback_data=f"edit_resume_field:photo:{resume_id}")
-            )
-            builder.row(
-                InlineKeyboardButton(text="🔙 Отмена", callback_data=f"resume:view:{resume_id}")
-            )
-
-            await edit_message_content(callback, text, reply_markup=builder.as_markup())
-            await state.set_state(ResumeEditStates.select_field)
+            await edit_message_content(callback, text, reply_markup=get_edit_sections_keyboard(resume_id))
+            await state.set_state(ResumeEditStates.select_section)
 
     except Exception as e:
         logger.error(f"Error starting resume edit: {e}")
         await callback.message.answer("❌ Ошибка при загрузке резюме")
 
 
-@router.callback_query(ResumeEditStates.select_field, F.data.startswith("edit_resume_field:"))
+@router.callback_query(ResumeEditStates.select_section, F.data.startswith("edit_resume_field:"))
 async def select_resume_field(callback: CallbackQuery, state: FSMContext):
     """Handle field selection for editing."""
     await callback.answer()
@@ -738,24 +794,88 @@ async def select_resume_field(callback: CallbackQuery, state: FSMContext):
     field = parts[1]
     resume_id = parts[2]
 
-    await state.update_data(editing_field=field)
+    await state.update_data(editing_field=field, editing_resume_id=resume_id)
 
     # Show input prompt based on field type
     prompts = {
-        "salary": "💰 <b>Желаемая зарплата</b>\n\nВведите желаемую зарплату (только число):\nПример: 50000",
-        "city": "📍 <b>Город</b>\n\nВведите город:",
-        "position": "💼 <b>Должность</b>\n\nВведите желаемую должность:",
-        "skills": "🎯 <b>Навыки</b>\n\nВведите навыки через запятую:\nПример: Работа с кассой, Знание меню, Сервис",
-        "phone": "📞 <b>Телефон</b>\n\nВведите номер телефона:\nПример: +7 900 123-45-67",
-        "email": "✉️ <b>Email</b>\n\nВведите email:",
-        "about": "📝 <b>О себе</b>\n\nНапишите информацию о себе:",
-        "photo": "📸 <b>Фото</b>\n\nОтправьте новое фото для резюме:"
+        "salary": "💰 <b>Желаемая зарплата</b>\n\nВведи желаемую зарплату (только число):\nПример: 50000",
+        "city": "📍 <b>Город</b>\n\nВведи город:",
+        "position": "💼 <b>Должность</b>\n\nВведи желаемую должность:",
+        "skills": "🎯 <b>Навыки</b>\n\nВведи навыки через запятую:\nПример: Работа с кассой, Знание меню, Сервис",
+        "phone": "📞 <b>Телефон</b>\n\nВведи номер телефона:\nПример: +7 900 123-45-67",
+        "email": "✉️ <b>Email</b>\n\nВведи email:",
+        "about": "📝 <b>О себе</b>\n\nНапиши информацию о себе:",
+        "photo": "📸 <b>Фото</b>\n\nОтправь новое фото для резюме:",
+        "personal": (
+            "👤 <b>Личные данные</b>\n\n"
+            "Что хочешь изменить?\n"
+            "Выбери из списка:"
+        ),
+        "contacts": (
+            "📞 <b>Контакты</b>\n\n"
+            "Что хочешь изменить?\n"
+            "Выбери из списка:"
+        ),
+        "experience": (
+            "💼 <b>Опыт работы</b>\n\n"
+            "Чтобы изменить опыт работы, напиши в свободной форме:\n"
+            "Компания, должность, период работы.\n\n"
+            "Например: Ресторан Восход, официант, 2020-2023"
+        ),
+        "education": (
+            "🎓 <b>Образование</b>\n\n"
+            "Напиши информацию об образовании:\n"
+            "Уровень, учебное заведение.\n\n"
+            "Например: Высшее, МГУ"
+        ),
+        "courses": (
+            "📜 <b>Курсы</b>\n\n"
+            "Напиши информацию о курсах:\n"
+            "Название курса, организатор, год.\n\n"
+            "Например: Бариста-профи, Кофемания, 2022"
+        ),
+        "languages": (
+            "🌍 <b>Языки</b>\n\n"
+            "Напиши языки и уровень владения:\n\n"
+            "Например: Английский B2, Французский A1"
+        ),
     }
 
-    prompt = prompts.get(field, "Введите новое значение:")
+    prompt = prompts.get(field, "Введи новое значение:")
 
-    # Добавим кнопку Назад к выбору полей и Отмена к резюме
+    # Для полей с подменю создаём дополнительные кнопки
     kb = InlineKeyboardBuilder()
+
+    if field == "personal":
+        kb.row(
+            InlineKeyboardButton(text="👤 ФИО", callback_data=f"edit_resume_subfield:full_name:{resume_id}"),
+            InlineKeyboardButton(text="🌍 Гражданство", callback_data=f"edit_resume_subfield:citizenship:{resume_id}")
+        )
+        kb.row(
+            InlineKeyboardButton(text="🎂 Дата рождения", callback_data=f"edit_resume_subfield:birth_date:{resume_id}"),
+            InlineKeyboardButton(text="📍 Город", callback_data=f"edit_resume_subfield:city:{resume_id}")
+        )
+        kb.row(
+            InlineKeyboardButton(text="✈️ Готовность к переезду", callback_data=f"edit_resume_subfield:relocate:{resume_id}")
+        )
+        kb.row(
+            InlineKeyboardButton(text="🔙 Назад", callback_data=f"resume:edit:{resume_id}")
+        )
+        await edit_message_content(callback, prompt, reply_markup=kb.as_markup())
+        return
+
+    if field == "contacts":
+        kb.row(
+            InlineKeyboardButton(text="📞 Телефон", callback_data=f"edit_resume_subfield:phone:{resume_id}"),
+            InlineKeyboardButton(text="✉️ Email", callback_data=f"edit_resume_subfield:email:{resume_id}")
+        )
+        kb.row(
+            InlineKeyboardButton(text="🔙 Назад", callback_data=f"resume:edit:{resume_id}")
+        )
+        await edit_message_content(callback, prompt, reply_markup=kb.as_markup())
+        return
+
+    # Обычные поля с текстовым вводом
     kb.row(
         InlineKeyboardButton(text="🔙 Назад", callback_data=f"resume:edit:{resume_id}"),
         InlineKeyboardButton(text="❌ Отмена", callback_data=f"resume:view:{resume_id}")
@@ -763,6 +883,97 @@ async def select_resume_field(callback: CallbackQuery, state: FSMContext):
 
     await edit_message_content(callback, prompt, reply_markup=kb.as_markup())
     await state.set_state(ResumeEditStates.edit_value)
+
+
+@router.callback_query(ResumeEditStates.select_section, F.data.startswith("edit_resume_subfield:"))
+async def select_resume_subfield(callback: CallbackQuery, state: FSMContext):
+    """Handle subfield selection for personal/contacts editing."""
+    await callback.answer()
+
+    parts = callback.data.split(":")
+    subfield = parts[1]
+    resume_id = parts[2]
+
+    await state.update_data(editing_field=subfield, editing_resume_id=resume_id)
+
+    # Prompts for subfields
+    prompts = {
+        "full_name": "👤 <b>ФИО</b>\n\nВведи полное имя:",
+        "citizenship": "🌍 <b>Гражданство</b>\n\nВведи гражданство:\nНапример: Россия",
+        "birth_date": "🎂 <b>Дата рождения</b>\n\nВведи дату в формате ДД.ММ.ГГГГ:\nНапример: 15.03.1995",
+        "city": "📍 <b>Город</b>\n\nВведи город:",
+        "relocate": "✈️ <b>Готовность к переезду</b>\n\nГотов ли ты к переезду?",
+        "phone": "📞 <b>Телефон</b>\n\nВведи номер телефона:\nНапример: +7 900 123-45-67",
+        "email": "✉️ <b>Email</b>\n\nВведи email:",
+    }
+
+    prompt = prompts.get(subfield, "Введи новое значение:")
+
+    kb = InlineKeyboardBuilder()
+
+    # Для relocate делаем кнопки Да/Нет
+    if subfield == "relocate":
+        kb.row(
+            InlineKeyboardButton(text="✅ Да", callback_data=f"edit_resume_relocate:yes:{resume_id}"),
+            InlineKeyboardButton(text="❌ Нет", callback_data=f"edit_resume_relocate:no:{resume_id}")
+        )
+        kb.row(
+            InlineKeyboardButton(text="🔙 Назад", callback_data=f"edit_resume_field:personal:{resume_id}")
+        )
+        await edit_message_content(callback, prompt, reply_markup=kb.as_markup())
+        return
+
+    kb.row(
+        InlineKeyboardButton(text="🔙 Назад", callback_data=f"resume:edit:{resume_id}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"resume:view:{resume_id}")
+    )
+
+    await edit_message_content(callback, prompt, reply_markup=kb.as_markup())
+    await state.set_state(ResumeEditStates.edit_value)
+
+
+@router.callback_query(ResumeEditStates.select_section, F.data.startswith("edit_resume_relocate:"))
+async def toggle_relocate(callback: CallbackQuery, state: FSMContext):
+    """Toggle relocate setting."""
+    await callback.answer()
+
+    parts = callback.data.split(":")
+    value = parts[1] == "yes"
+    resume_id = parts[2]
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = await build_auth_headers(callback.from_user.id, state)
+            if not headers:
+                await callback.message.answer("❌ Нет авторизации. Используй /start")
+                return
+            response = await client.patch(
+                f"{settings.api_url}/resumes/{resume_id}",
+                json={"ready_to_relocate": value},
+                headers=headers
+            )
+
+            if response.status_code == 200:
+                status = "готов к переезду" if value else "не готов к переезду"
+                await show_edit_continue_prompt(callback, state, resume_id, f"Статус: {status}")
+            else:
+                await callback.answer("❌ Ошибка обновления", show_alert=True)
+
+    except Exception as e:
+        logger.error(f"Error updating relocate: {e}")
+        await callback.answer("❌ Ошибка", show_alert=True)
+
+
+async def show_edit_continue_prompt(callback: CallbackQuery, state: FSMContext, resume_id: str, updated_text: str):
+    """Show prompt asking if user wants to edit more fields."""
+    text = (
+        f"✅ {updated_text}\n\n"
+        "<b>Ещё что-то хочешь исправить?</b>\n"
+        "Выбери раздел или нажми «Готово»:"
+    )
+
+    await edit_message_content(callback, text, reply_markup=get_edit_sections_keyboard(resume_id))
+    await state.set_state(ResumeEditStates.select_section)
 
 
 @router.message(ResumeEditStates.edit_value, F.photo)
@@ -786,7 +997,7 @@ async def process_resume_photo_edit(message: Message, state: FSMContext):
         async with httpx.AsyncClient(timeout=10.0) as client:
             headers = await build_auth_headers(message.from_user.id, state)
             if not headers:
-                await message.answer("❌ Нет авторизации. Используйте /start")
+                await message.answer("❌ Нет авторизации. Используй /start")
                 return
             response = await client.patch(
                 f"{settings.api_url}/resumes/{resume_id}",
@@ -795,22 +1006,24 @@ async def process_resume_photo_edit(message: Message, state: FSMContext):
             )
 
             if response.status_code == 200:
-                await message.answer(
-                    "✅ Фото успешно обновлено!",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                        InlineKeyboardButton(text="👀 Посмотреть резюме", callback_data=f"resume:view:{resume_id}")
-                    ]])
+                # Show continue prompt
+                text = (
+                    "✅ Фото успешно обновлено!\n\n"
+                    "<b>Ещё что-то хочешь исправить?</b>\n"
+                    "Выбери раздел или нажми «Готово»:"
                 )
+                await message.answer(text, reply_markup=get_edit_sections_keyboard(resume_id))
+                await state.set_state(ResumeEditStates.select_section)
                 logger.info(f"Resume {resume_id} photo updated")
             else:
                 error_detail = response.json().get("detail", "Unknown error")
                 await message.answer(f"❌ Ошибка обновления: {error_detail}")
+                await state.clear()
 
     except Exception as e:
         logger.error(f"Error updating resume photo: {e}")
         await message.answer("❌ Произошла ошибка при обновлении фото")
-
-    await state.clear()
+        await state.clear()
 
 
 @router.message(ResumeEditStates.edit_value)
@@ -822,7 +1035,7 @@ async def process_resume_field_edit(message: Message, state: FSMContext):
 
     # Check if user is trying to edit photo with text
     if field == "photo":
-        await message.answer("❌ Пожалуйста, отправьте фотографию, а не текст")
+        await message.answer("❌ Пожалуйста, отправь фотографию, а не текст")
         return
 
     new_value = message.text.strip()
@@ -834,46 +1047,122 @@ async def process_resume_field_edit(message: Message, state: FSMContext):
 
     # Validate and prepare data
     update_data = {}
+    field_name = ""  # Название поля для отображения
 
     try:
+        import re
+
         if field == "salary":
-            # Extract number
-            import re
             numbers = re.findall(r'\d+', new_value.replace(',', '').replace(' ', ''))
             if numbers:
                 update_data["desired_salary"] = int(numbers[0])
+                field_name = f"Зарплата: {numbers[0]} руб."
             else:
-                await message.answer("❌ Некорректная зарплата. Попробуйте еще раз:")
+                await message.answer("❌ Некорректная зарплата. Попробуй ещё раз:")
                 return
 
         elif field == "city":
             update_data["city"] = new_value
+            field_name = f"Город: {new_value}"
 
         elif field == "position":
             update_data["desired_position"] = new_value
+            field_name = f"Должность: {new_value}"
 
         elif field == "skills":
             skills = [s.strip() for s in new_value.split(",") if s.strip()]
             update_data["skills"] = skills
+            field_name = f"Навыки обновлены ({len(skills)} шт.)"
 
         elif field == "phone":
             update_data["phone"] = new_value
+            field_name = f"Телефон: {new_value}"
 
         elif field == "email":
-            # Basic email validation
             if "@" not in new_value or "." not in new_value:
-                await message.answer("❌ Некорректный email. Попробуйте еще раз:")
+                await message.answer("❌ Некорректный email. Попробуй ещё раз:")
                 return
             update_data["email"] = new_value
+            field_name = f"Email: {new_value}"
 
         elif field == "about":
             update_data["about"] = new_value
+            field_name = "О себе обновлено"
+
+        elif field == "full_name":
+            update_data["full_name"] = new_value
+            field_name = f"ФИО: {new_value}"
+
+        elif field == "citizenship":
+            update_data["citizenship"] = new_value
+            field_name = f"Гражданство: {new_value}"
+
+        elif field == "birth_date":
+            # Validate date format DD.MM.YYYY
+            date_match = re.match(r'^(\d{2})\.(\d{2})\.(\d{4})$', new_value)
+            if date_match:
+                day, month, year = date_match.groups()
+                # Convert to ISO format YYYY-MM-DD
+                update_data["birth_date"] = f"{year}-{month}-{day}"
+                field_name = f"Дата рождения: {new_value}"
+            else:
+                await message.answer("❌ Некорректный формат даты. Используй ДД.ММ.ГГГГ\nНапример: 15.03.1995")
+                return
+
+        elif field == "experience":
+            # Parse experience: Company, position, period
+            # Это простой парсинг, можно улучшить
+            update_data["work_experience"] = [{
+                "company": new_value.split(",")[0].strip() if "," in new_value else new_value,
+                "position": new_value.split(",")[1].strip() if "," in new_value and len(new_value.split(",")) > 1 else "",
+                "start_date": None,
+                "end_date": None,
+            }]
+            field_name = "Опыт работы обновлён"
+
+        elif field == "education":
+            # Parse education: Level, institution
+            parts = [p.strip() for p in new_value.split(",")]
+            update_data["education"] = [{
+                "level": parts[0] if parts else new_value,
+                "institution": parts[1] if len(parts) > 1 else "",
+                "faculty": None,
+                "graduation_year": None,
+            }]
+            field_name = "Образование обновлено"
+
+        elif field == "courses":
+            # Parse courses: Name, organization, year
+            parts = [p.strip() for p in new_value.split(",")]
+            update_data["courses"] = [{
+                "name": parts[0] if parts else new_value,
+                "organization": parts[1] if len(parts) > 1 else None,
+                "completion_year": int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None,
+            }]
+            field_name = "Курсы обновлены"
+
+        elif field == "languages":
+            # Parse languages: Language Level, Language Level
+            languages = []
+            for lang_str in new_value.split(","):
+                parts = lang_str.strip().split()
+                if parts:
+                    lang_name = parts[0]
+                    level = parts[1] if len(parts) > 1 else "B1"
+                    languages.append({"language": lang_name, "level": level})
+            update_data["languages"] = languages
+            field_name = f"Языки обновлены ({len(languages)} шт.)"
+
+        else:
+            await message.answer("❌ Неизвестное поле для редактирования")
+            await state.clear()
+            return
 
         # Update via API
         async with httpx.AsyncClient(timeout=10.0) as client:
             headers = await build_auth_headers(message.from_user.id, state)
             if not headers:
-                await message.answer("❌ Нет авторизации. Используйте /start")
+                await message.answer("❌ Нет авторизации. Используй /start")
                 return
             response = await client.patch(
                 f"{settings.api_url}/resumes/{resume_id}",
@@ -882,22 +1171,24 @@ async def process_resume_field_edit(message: Message, state: FSMContext):
             )
 
             if response.status_code == 200:
-                await message.answer(
-                    "✅ Резюме успешно обновлено!",
-                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                        InlineKeyboardButton(text="👀 Посмотреть резюме", callback_data=f"resume:view:{resume_id}")
-                    ]])
+                # Show continue prompt
+                text = (
+                    f"✅ {field_name}\n\n"
+                    "<b>Ещё что-то хочешь исправить?</b>\n"
+                    "Выбери раздел или нажми «Готово»:"
                 )
+                await message.answer(text, reply_markup=get_edit_sections_keyboard(resume_id))
+                await state.set_state(ResumeEditStates.select_section)
                 logger.info(f"Resume {resume_id} field '{field}' updated")
             else:
                 error_detail = response.json().get("detail", "Unknown error")
                 await message.answer(f"❌ Ошибка обновления: {error_detail}")
+                await state.clear()
 
     except Exception as e:
         logger.error(f"Error updating resume field: {e}")
         await message.answer("❌ Произошла ошибка при обновлении резюме")
-
-    await state.clear()
+        await state.clear()
 
 
 @router.callback_query(F.data.startswith("resume:stats:"))

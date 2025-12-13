@@ -354,18 +354,19 @@ async def archive_resume(resume_id: PydanticObjectId):
 
     # Delete all publications from channels
     publications = await Publication.find(
-        {"resume.$id": resume_id},
-        Publication.is_published == True,
-        Publication.is_deleted == False
+        Publication.resume.id == resume_id,
     ).to_list()
 
+    logger.info(f"Found {len(publications)} publications for resume {resume_id} to archive")
+
     for pub in publications:
-        try:
-            deleted = await telegram_publisher.delete_publication(pub)
-            if deleted:
-                logger.info(f"Deleted publication {pub.id} from channel {pub.channel_name}")
-        except Exception as e:
-            logger.error(f"Failed to delete publication {pub.id}: {e}")
+        if pub.is_published and not pub.is_deleted:
+            try:
+                deleted = await telegram_publisher.delete_publication(pub)
+                if deleted:
+                    logger.info(f"Deleted publication {pub.id} from channel {pub.channel_name}")
+            except Exception as e:
+                logger.error(f"Failed to delete publication {pub.id}: {e}")
 
     return resume
 
@@ -387,20 +388,27 @@ async def delete_resume(resume_id: PydanticObjectId):
             detail="Resume not found"
         )
 
-    # Find and delete all publications for this resume
+    # Find all publications for this resume (try multiple query formats)
     publications = await Publication.find(
-        {"resume.$id": resume_id},
-        Publication.is_published == True,
-        Publication.is_deleted == False
+        Publication.resume.id == resume_id,
     ).to_list()
 
+    logger.info(f"Found {len(publications)} publications for resume {resume_id}")
+
     for pub in publications:
-        try:
-            deleted = await telegram_publisher.delete_publication(pub)
-            if deleted:
-                logger.info(f"Deleted publication {pub.id} from channel {pub.channel_name}")
-        except Exception as e:
-            logger.error(f"Failed to delete publication {pub.id}: {e}")
+        if pub.is_published and not pub.is_deleted:
+            try:
+                logger.info(f"Deleting publication {pub.id} (message_id={pub.message_id}) from channel {pub.channel_id}")
+                deleted = await telegram_publisher.delete_publication(pub)
+                if deleted:
+                    logger.info(f"Successfully deleted publication {pub.id} from channel {pub.channel_name}")
+                else:
+                    logger.warning(f"Failed to delete publication {pub.id} - delete_publication returned False")
+            except Exception as e:
+                logger.error(f"Failed to delete publication {pub.id}: {e}")
+
+        # Also delete the publication record from DB
+        await pub.delete()
 
     await resume.delete()
 

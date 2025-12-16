@@ -197,6 +197,7 @@ class DraftVacancy(Document):
     # Position
     position: Optional[str] = None
     position_category: Optional[str] = None
+    cuisines: List[str] = Field(default_factory=list)
 
     # Company info
     company_name: Optional[str] = None
@@ -208,22 +209,39 @@ class DraftVacancy(Document):
     # Location
     city: Optional[str] = None
     metro_stations: List[str] = Field(default_factory=list)
+    nearest_metro: Optional[str] = None
 
     # Salary
     salary_min: Optional[int] = None
     salary_max: Optional[int] = None
+    salary_type: Optional[str] = None
+
+    # Employment
+    employment_type: Optional[str] = None
+    work_schedule: List[str] = Field(default_factory=list)
 
     # Requirements
-    requirements: Optional[str] = None
-    experience_required: Optional[str] = None
+    required_experience: Optional[str] = None
+    required_education: Optional[str] = None
+    required_skills: List[str] = Field(default_factory=list)
+    required_documents: List[str] = Field(default_factory=list)
 
-    # Conditions
-    work_schedule: List[str] = Field(default_factory=list)
-    employment_type: Optional[str] = None
+    # Employment terms
+    has_employment_contract: Optional[bool] = None
+    has_probation_period: Optional[bool] = None
+    probation_duration: Optional[str] = None
+    allows_remote_work: Optional[bool] = None
+
+    # Benefits
     benefits: List[str] = Field(default_factory=list)
 
     # Description
     description: Optional[str] = None
+    responsibilities: List[str] = Field(default_factory=list)
+
+    # Publication settings
+    is_anonymous: Optional[bool] = None
+    publication_duration_days: Optional[int] = None
 
     # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -241,6 +259,7 @@ class DraftVacancy(Document):
         field_mapping = {
             "position": "position",
             "position_category": "position_category",
+            "cuisines": "cuisines",
             "company_name": "company_name",
             "company_type": "company_type",
             "company_description": "company_description",
@@ -248,14 +267,25 @@ class DraftVacancy(Document):
             "company_website": "company_website",
             "city": "city",
             "metro_stations": "metro_stations",
+            "nearest_metro": "nearest_metro",
             "salary_min": "salary_min",
             "salary_max": "salary_max",
-            "requirements": "requirements",
-            "experience_required": "experience_required",
-            "work_schedule": "work_schedule",
+            "salary_type": "salary_type",
             "employment_type": "employment_type",
+            "work_schedule": "work_schedule",
+            "required_experience": "required_experience",
+            "required_education": "required_education",
+            "required_skills": "required_skills",
+            "required_documents": "required_documents",
+            "has_employment_contract": "has_employment_contract",
+            "has_probation_period": "has_probation_period",
+            "probation_duration": "probation_duration",
+            "allows_remote_work": "allows_remote_work",
             "benefits": "benefits",
             "description": "description",
+            "responsibilities": "responsibilities",
+            "is_anonymous": "is_anonymous",
+            "publication_duration_days": "publication_duration_days",
             "first_vacancy": "is_first_vacancy",
         }
 
@@ -273,6 +303,8 @@ class DraftVacancy(Document):
             data["position"] = self.position
         if self.position_category:
             data["position_category"] = self.position_category
+        if self.cuisines:
+            data["cuisines"] = self.cuisines
         if self.company_name:
             data["company_name"] = self.company_name
         if self.company_type:
@@ -287,22 +319,44 @@ class DraftVacancy(Document):
             data["city"] = self.city
         if self.metro_stations:
             data["metro_stations"] = self.metro_stations
+        if self.nearest_metro:
+            data["nearest_metro"] = self.nearest_metro
         if self.salary_min is not None:
             data["salary_min"] = self.salary_min
         if self.salary_max is not None:
             data["salary_max"] = self.salary_max
-        if self.requirements:
-            data["requirements"] = self.requirements
-        if self.experience_required:
-            data["experience_required"] = self.experience_required
-        if self.work_schedule:
-            data["work_schedule"] = self.work_schedule
+        if self.salary_type:
+            data["salary_type"] = self.salary_type
         if self.employment_type:
             data["employment_type"] = self.employment_type
+        if self.work_schedule:
+            data["work_schedule"] = self.work_schedule
+        if self.required_experience:
+            data["required_experience"] = self.required_experience
+        if self.required_education:
+            data["required_education"] = self.required_education
+        if self.required_skills:
+            data["required_skills"] = self.required_skills
+        if self.required_documents:
+            data["required_documents"] = self.required_documents
+        if self.has_employment_contract is not None:
+            data["has_employment_contract"] = self.has_employment_contract
+        if self.has_probation_period is not None:
+            data["has_probation_period"] = self.has_probation_period
+        if self.probation_duration:
+            data["probation_duration"] = self.probation_duration
+        if self.allows_remote_work is not None:
+            data["allows_remote_work"] = self.allows_remote_work
         if self.benefits:
             data["benefits"] = self.benefits
         if self.description:
             data["description"] = self.description
+        if self.responsibilities:
+            data["responsibilities"] = self.responsibilities
+        if self.is_anonymous is not None:
+            data["is_anonymous"] = self.is_anonymous
+        if self.publication_duration_days is not None:
+            data["publication_duration_days"] = self.publication_duration_days
         if self.is_first_vacancy:
             data["first_vacancy"] = self.is_first_vacancy
 

@@ -11,7 +11,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 import httpx
 
-from backend.models import User, Vacancy
+from backend.models import User, Vacancy, get_vacancy_progress, delete_vacancy_progress
 from shared.constants import UserRole, VacancyStatus
 from config.settings import settings
 from bot.utils.formatters import format_salary_range, format_date
@@ -38,6 +38,37 @@ async def start_vacancy_creation(message: Message, state: FSMContext):
 
     logger.info(f"User {telegram_id} started vacancy creation")
 
+    # Check for saved draft (progress recovery)
+    draft = await get_vacancy_progress(telegram_id)
+    if draft and draft.current_state and draft.position:
+        # Found saved progress - ask if user wants to continue
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            InlineKeyboardButton(text="✅ Продолжить", callback_data="vacancy_draft:continue"),
+            InlineKeyboardButton(text="🗑 Начать заново", callback_data="vacancy_draft:new")
+        )
+
+        # Show what was saved
+        progress_info = f"• Должность: {draft.position}"
+        if draft.company_name:
+            progress_info += f"\n• Компания: {draft.company_name}"
+        if draft.city:
+            progress_info += f"\n• Город: {draft.city}"
+        if draft.salary_min:
+            salary_text = f"{draft.salary_min:,} ₽"
+            if draft.salary_max:
+                salary_text += f" - {draft.salary_max:,} ₽"
+            progress_info += f"\n• Зарплата: {salary_text}"
+
+        await message.answer(
+            "📝 <b>Найден сохранённый прогресс!</b>\n\n"
+            f"У вас есть незавершённая вакансия:\n{progress_info}\n\n"
+            "Хотите продолжить с того места, где остановились, "
+            "или начать создание вакансии заново?",
+            reply_markup=builder.as_markup()
+        )
+        return
+
     await state.set_data({})
 
     # First send reply keyboard with back/cancel buttons
@@ -55,6 +86,314 @@ async def start_vacancy_creation(message: Message, state: FSMContext):
         reply_markup=get_position_categories_keyboard()
     )
     await state.set_state(VacancyCreationStates.position_category)
+
+
+@router.callback_query(F.data == "vacancy_draft:continue")
+async def continue_vacancy_draft(callback: CallbackQuery, state: FSMContext):
+    """Continue vacancy creation from saved draft."""
+    await callback.answer()
+    telegram_id = callback.from_user.id
+
+    # Get saved draft
+    draft = await get_vacancy_progress(telegram_id)
+    if not draft:
+        await callback.message.edit_text(
+            "❌ Черновик не найден. Начните создание вакансии заново."
+        )
+        return
+
+    # Restore FSM data from draft
+    fsm_data = draft.to_fsm_data()
+    await state.set_data(fsm_data)
+
+    # Restore state
+    saved_state = draft.current_state
+    if saved_state and ":" in saved_state:
+        try:
+            await state.set_state(saved_state)
+            logger.info(f"Restored vacancy state {saved_state} for user {telegram_id}")
+
+            # Show message about restoration
+            from bot.keyboards.common import get_back_cancel_keyboard
+            await callback.message.edit_text(
+                "✅ <b>Прогресс восстановлен!</b>\n\n"
+                "Продолжайте с того места, где остановились.\n"
+                "Используйте кнопки ниже для навигации.",
+                reply_markup=None
+            )
+
+            # Send reply keyboard
+            await callback.message.answer(
+                "Используйте кнопки для навигации:",
+                reply_markup=get_back_cancel_keyboard()
+            )
+
+            # Trigger the current state prompt
+            await _show_current_state_prompt_vacancy(callback.message, state, saved_state)
+
+        except Exception as e:
+            logger.error(f"Error restoring vacancy state: {e}")
+            from bot.keyboards.common import get_back_cancel_keyboard
+            await state.set_state(VacancyCreationStates.position_category)
+            await callback.message.edit_text(
+                "⚠️ Не удалось точно восстановить позицию.\n"
+                "Начнём с первого вопроса, но все данные сохранены.\n\n"
+                "<b>На какую должность вы ищете сотрудника?</b>",
+                reply_markup=get_position_categories_keyboard()
+            )
+            await callback.message.answer(
+                "Используйте кнопки для навигации:",
+                reply_markup=get_back_cancel_keyboard()
+            )
+    else:
+        from bot.keyboards.common import get_back_cancel_keyboard
+        await state.set_state(VacancyCreationStates.position_category)
+        await callback.message.edit_text(
+            "📝 <b>Продолжаем создание вакансии</b>\n\n"
+            "<b>На какую должность вы ищете сотрудника?</b>",
+            reply_markup=get_position_categories_keyboard()
+        )
+        await callback.message.answer(
+            "Используйте кнопки для навигации:",
+            reply_markup=get_back_cancel_keyboard()
+        )
+
+
+@router.callback_query(F.data == "vacancy_draft:new")
+async def start_new_vacancy(callback: CallbackQuery, state: FSMContext):
+    """Discard draft and start new vacancy creation."""
+    await callback.answer()
+    telegram_id = callback.from_user.id
+
+    # Delete old draft
+    await delete_vacancy_progress(telegram_id)
+
+    # Clear state
+    await state.set_data({})
+
+    from bot.keyboards.common import get_back_cancel_keyboard
+
+    # Update message
+    await callback.message.edit_text(
+        "📝 <b>Создание вакансии</b>\n\n"
+        "Хорошо! Начинаем с чистого листа.\n\n"
+        "Я буду задавать вам вопросы шаг за шагом.",
+        reply_markup=None
+    )
+
+    # Send reply keyboard
+    await callback.message.answer(
+        "Используйте кнопки для навигации:",
+        reply_markup=get_back_cancel_keyboard()
+    )
+
+    # Send category selection
+    await callback.message.answer(
+        "<b>На какую должность вы ищете сотрудника?</b>\n"
+        "Выберите категорию:",
+        reply_markup=get_position_categories_keyboard()
+    )
+    await state.set_state(VacancyCreationStates.position_category)
+
+
+async def _show_current_state_prompt_vacancy(message: Message, state: FSMContext, state_name: str):
+    """Show appropriate prompt for the current vacancy creation state."""
+    from bot.keyboards.positions import (
+        get_position_categories_keyboard,
+        get_positions_keyboard,
+        get_cuisines_keyboard,
+        get_skills_keyboard
+    )
+    from bot.handlers.employer.vacancy_creation import (
+        get_company_type_keyboard,
+        get_company_size_keyboard,
+        get_skip_keyboard,
+        get_city_selection_keyboard
+    )
+    from bot.handlers.employer.vacancy_completion import (
+        get_salary_type_keyboard,
+        get_employment_type_keyboard,
+        get_work_schedule_keyboard,
+        get_experience_keyboard,
+        get_education_keyboard,
+        get_yes_no_keyboard,
+        get_benefits_keyboard
+    )
+    from bot.handlers.employer.vacancy_finalize import get_publication_duration_keyboard
+
+    data = await state.get_data()
+    state_short = state_name.split(":")[-1] if ":" in state_name else state_name
+
+    # Map states to their prompts
+    if state_short == "position_category":
+        await message.answer(
+            "<b>На какую должность вы ищете сотрудника?</b>\n"
+            "Выберите категорию:",
+            reply_markup=get_position_categories_keyboard()
+        )
+    elif state_short == "position":
+        category = data.get("position_category")
+        await message.answer(
+            "<b>Выберите конкретную должность:</b>",
+            reply_markup=get_positions_keyboard(category)
+        )
+    elif state_short == "cuisines":
+        cuisines = data.get("cuisines", [])
+        await message.answer(
+            "<b>Выберите типы кухонь:</b>\n(можно выбрать несколько)",
+            reply_markup=get_cuisines_keyboard(selected_cuisines=cuisines)
+        )
+    elif state_short == "company_name":
+        await message.answer("<b>Как называется ваша компания?</b>")
+    elif state_short == "company_type":
+        await message.answer(
+            "<b>Выберите тип заведения:</b>",
+            reply_markup=get_company_type_keyboard()
+        )
+    elif state_short == "company_description":
+        await message.answer(
+            "<b>Расскажите о вашем заведении:</b>\n"
+            "Какая концепция, атмосфера, целевая аудитория?"
+        )
+    elif state_short == "company_size":
+        await message.answer(
+            "<b>Какой размер вашей компании?</b>",
+            reply_markup=get_company_size_keyboard()
+        )
+    elif state_short == "company_website":
+        await message.answer(
+            "<b>Есть ли у вашей компании сайт?</b>\n"
+            "Введите ссылку или пропустите этот шаг:",
+            reply_markup=get_skip_keyboard("website")
+        )
+    elif state_short == "city":
+        await message.answer(
+            "📍 <b>Местоположение</b>\n\n"
+            "В каком городе находится вакансия?",
+            reply_markup=get_city_selection_keyboard()
+        )
+    elif state_short == "nearest_metro":
+        city = data.get("city", "")
+        await message.answer(
+            f"🚇 <b>Ближайшие станции метро</b>\n\n"
+            f"Город: {city}\n\n"
+            "Укажите станции метро рядом с вашим заведением.\n"
+            "Можно несколько через запятую.",
+            reply_markup=get_skip_keyboard("metro")
+        )
+    elif state_short == "salary_min":
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💰 По договоренности", callback_data="salary_min:negotiable")]
+        ])
+        await message.answer(
+            "💰 <b>Укажите условия оплаты</b>\n\n"
+            "Введите <b>минимальную</b> зарплату (в рублях):\n"
+            "Или выберите 'По договоренности'",
+            reply_markup=keyboard
+        )
+    elif state_short == "salary_max":
+        await message.answer(
+            "<b>Введите максимальную зарплату:</b>\n"
+            "(или '-' если только минимальная)"
+        )
+    elif state_short == "salary_type":
+        await message.answer(
+            "<b>Выберите период выплаты:</b>",
+            reply_markup=get_salary_type_keyboard()
+        )
+    elif state_short == "employment_type":
+        await message.answer(
+            "<b>Выберите тип занятости:</b>",
+            reply_markup=get_employment_type_keyboard()
+        )
+    elif state_short == "work_schedule":
+        schedules = data.get("work_schedule", [])
+        await message.answer(
+            "<b>Выберите график работы:</b>\n(можно выбрать несколько)",
+            reply_markup=get_work_schedule_keyboard(selected_schedules=schedules)
+        )
+    elif state_short == "required_experience":
+        await message.answer(
+            "<b>Какой опыт работы требуется?</b>",
+            reply_markup=get_experience_keyboard()
+        )
+    elif state_short == "required_education":
+        await message.answer(
+            "<b>Какое образование требуется?</b>",
+            reply_markup=get_education_keyboard()
+        )
+    elif state_short == "required_skills":
+        category = data.get("position_category")
+        skills = data.get("required_skills", [])
+        await message.answer(
+            "<b>Выберите необходимые навыки:</b>\n(можно выбрать несколько или пропустить)",
+            reply_markup=get_skills_keyboard(category, skills)
+        )
+    elif state_short == "has_employment_contract":
+        await message.answer(
+            "<b>Предусмотрен ли трудовой договор?</b>",
+            reply_markup=get_yes_no_keyboard()
+        )
+    elif state_short == "has_probation_period":
+        await message.answer(
+            "<b>Есть ли испытательный срок?</b>",
+            reply_markup=get_yes_no_keyboard()
+        )
+    elif state_short == "probation_duration":
+        await message.answer(
+            "<b>Какова длительность испытательного срока?</b>\n"
+            "(например: '1 месяц', '3 месяца')"
+        )
+    elif state_short == "allows_remote_work":
+        await message.answer(
+            "<b>Возможна ли удаленная работа?</b>",
+            reply_markup=get_yes_no_keyboard()
+        )
+    elif state_short == "benefits":
+        benefits = data.get("benefits", [])
+        await message.answer(
+            "<b>✨ МЫ ПРЕДЛАГАЕМ</b>\n\n"
+            "Выберите дополнительные преимущества:\n"
+            "(можно выбрать несколько или пропустить)",
+            reply_markup=get_benefits_keyboard(selected_benefits=benefits)
+        )
+    elif state_short == "required_documents":
+        await message.answer(
+            "<b>Какие документы нужно предоставить при устройстве?</b>\n"
+            "(например: паспорт, медкнижка, ИНН)\n\n"
+            "Каждый документ с новой строки, или введите '-'"
+        )
+    elif state_short == "description":
+        await message.answer(
+            "📝 <b>Опишите вакансию</b>\n\n"
+            "Напишите общее описание вакансии:\n"
+            "(что ожидает кандидата, особенности работы)"
+        )
+    elif state_short == "responsibilities":
+        await message.answer(
+            "<b>Укажите основные обязанности:</b>\n"
+            "(каждая обязанность с новой строки)"
+        )
+    elif state_short == "is_anonymous":
+        await message.answer(
+            "<b>Публиковать вакансию анонимно?</b>\n"
+            "(без указания названия компании и контактов)",
+            reply_markup=get_yes_no_keyboard()
+        )
+    elif state_short == "publication_duration_days":
+        await message.answer(
+            "<b>На сколько дней опубликовать вакансию?</b>",
+            reply_markup=get_publication_duration_keyboard()
+        )
+    else:
+        # Unknown state - ask for position
+        await message.answer(
+            "<b>На какую должность вы ищете сотрудника?</b>\n"
+            "Выберите категорию:",
+            reply_markup=get_position_categories_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.position_category)
 
 
 # ============ VACANCY MANAGEMENT ============

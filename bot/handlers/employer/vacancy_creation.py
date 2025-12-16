@@ -26,6 +26,12 @@ router.message.filter(IsNotMenuButton())
 
 async def _handle_cancel_vacancy(message: Message, state: FSMContext):
     """Common cancel handler for vacancy creation."""
+    telegram_id = message.from_user.id
+
+    # Delete draft
+    from backend.models import delete_vacancy_progress
+    await delete_vacancy_progress(telegram_id)
+
     await state.clear()
     from bot.keyboards.common import get_main_menu_employer
     await message.answer(

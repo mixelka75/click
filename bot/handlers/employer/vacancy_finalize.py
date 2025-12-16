@@ -21,6 +21,12 @@ router.message.filter(IsNotMenuButton())
 
 async def _handle_cancel_vacancy(message: Message, state: FSMContext):
     """Common cancel handler for vacancy creation."""
+    telegram_id = message.from_user.id
+
+    # Delete draft
+    from backend.models import delete_vacancy_progress
+    await delete_vacancy_progress(telegram_id)
+
     await state.clear()
     from bot.keyboards.common import get_main_menu_employer
     await message.answer(
@@ -318,6 +324,10 @@ async def process_publish_confirm(callback: CallbackQuery, state: FSMContext):
         )
         logger.error(f"Error creating vacancy: {e}")
 
+    # Delete draft after successful publish
+    from backend.models import delete_vacancy_progress
+    await delete_vacancy_progress(telegram_id)
+
     # Clear state
     await state.clear()
 
@@ -381,6 +391,10 @@ async def process_publish_cancel(callback: CallbackQuery, state: FSMContext):
             "❌ Создание вакансии отменено.\n\n"
             "Вы можете начать заново в любое время."
         )
+
+    # Delete draft
+    from backend.models import delete_vacancy_progress
+    await delete_vacancy_progress(callback.from_user.id)
 
     # Clear state
     await state.clear()

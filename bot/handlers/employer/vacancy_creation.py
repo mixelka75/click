@@ -4,6 +4,7 @@ Updated: Formal "вы" style, metro instead of address, city buttons.
 """
 
 from aiogram import Router, F
+from aiogram.filters import StateFilter
 from bot.filters import IsNotMenuButton
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -751,17 +752,20 @@ async def finish_location(message: Message, state: FSMContext):
 
 # ============ CANCEL HANDLER ============
 
-@router.message(F.text == "🚫 Отменить создание")
+@router.message(F.text == "🚫 Отменить создание", StateFilter(VacancyCreationStates))
 async def cancel_vacancy_creation(message: Message, state: FSMContext):
-    """Cancel vacancy creation."""
-    current_state = await state.get_state()
-    if current_state and current_state.startswith("VacancyCreation"):
-        await state.clear()
-        from bot.keyboards.common import get_main_menu_employer
-        await message.answer(
-            "❌ Создание вакансии отменено.",
-            reply_markup=get_main_menu_employer()
-        )
+    """Cancel vacancy creation (only when in VacancyCreation state)."""
+    # Delete draft
+    telegram_id = message.from_user.id
+    from backend.models import delete_vacancy_progress
+    await delete_vacancy_progress(telegram_id)
+
+    await state.clear()
+    from bot.keyboards.common import get_main_menu_employer
+    await message.answer(
+        "❌ Создание вакансии отменено.",
+        reply_markup=get_main_menu_employer()
+    )
 
 
 # ============ TEXT HANDLERS FOR INLINE STATES (BACK/CANCEL) ============

@@ -4,6 +4,7 @@ Updated: Photo is now required (1-5), references removed.
 """
 
 from aiogram import Router, F
+from aiogram.filters import StateFilter
 from bot.filters import IsNotMenuButton
 from aiogram.types import Message, CallbackQuery, LinkPreviewOptions
 from aiogram.fsm.context import FSMContext
@@ -400,34 +401,36 @@ async def publish_resume(callback: CallbackQuery, state: FSMContext):
 
 # ============ CANCEL HANDLER ============
 
-@router.message(F.text == "🚫 Отменить создание")
+@router.message(F.text == "🚫 Отменить создание", StateFilter(ResumeCreationStates))
 async def cancel_creation(message: Message, state: FSMContext):
-    """Cancel resume creation at any step."""
-    current_state = await state.get_state()
-    if current_state:
-        data = await state.get_data()
-        is_first_resume = data.get("first_resume", False)
+    """Cancel resume creation at any step (only when in ResumeCreation state)."""
+    data = await state.get_data()
+    is_first_resume = data.get("first_resume", False)
 
-        await state.clear()
+    # Delete draft
+    telegram_id = message.from_user.id
+    await delete_resume_progress(telegram_id)
 
-        if is_first_resume:
-            # Delete user and return to role selection
-            telegram_id = message.from_user.id
-            user = await User.find_one(User.telegram_id == telegram_id)
-            if user:
-                await user.delete()
-                logger.info(f"Deleted user {telegram_id} after canceling first resume")
+    await state.clear()
 
-            from bot.keyboards.common import get_role_selection_keyboard
-            welcome_text = (
-                "👋 <b>Добро пожаловать в CLICK!</b>\n\n"
-                "CLICK — это сервис для поиска работы в сфере HoReCa "
-                "(рестораны, бары, кафе, отели).\n\n"
-                "Выбери, кто ты:"
-            )
-            await message.answer(welcome_text, reply_markup=get_role_selection_keyboard())
-        else:
-            await message.answer(
-                "❌ Создание резюме отменено.",
-                reply_markup=get_main_menu_applicant()
-            )
+    if is_first_resume:
+        # Delete user and return to role selection
+        telegram_id = message.from_user.id
+        user = await User.find_one(User.telegram_id == telegram_id)
+        if user:
+            await user.delete()
+            logger.info(f"Deleted user {telegram_id} after canceling first resume")
+
+        from bot.keyboards.common import get_role_selection_keyboard
+        welcome_text = (
+            "👋 <b>Добро пожаловать в CLICK!</b>\n\n"
+            "CLICK — это сервис для поиска работы в сфере HoReCa "
+            "(рестораны, бары, кафе, отели).\n\n"
+            "Выбери, кто ты:"
+        )
+        await message.answer(welcome_text, reply_markup=get_role_selection_keyboard())
+    else:
+        await message.answer(
+            "❌ Создание резюме отменено.",
+            reply_markup=get_main_menu_applicant()
+        )

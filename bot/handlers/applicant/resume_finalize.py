@@ -190,8 +190,7 @@ async def show_resume_preview(message: Message, state: FSMContext):
         await message.answer_photo(
             photo=photo_file_ids[0],
             caption=preview_text,
-            reply_markup=get_confirm_publish_keyboard(),
-            show_caption_above_media=True
+            reply_markup=get_confirm_publish_keyboard()
         )
 
         # If multiple photos, mention it

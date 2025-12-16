@@ -350,8 +350,13 @@ async def show_resume_details(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer("❌ Ошибка при загрузке резюме.")
 
 
-def format_resume_details(resume: dict) -> str:
-    """Format detailed resume information."""
+def format_resume_details(resume: dict, show_contacts: bool = False) -> str:
+    """Format detailed resume information.
+
+    Args:
+        resume: Resume data dict
+        show_contacts: Whether to show contact information (default False for privacy)
+    """
     lines = ["📋 <b>РЕЗЮМЕ</b>\n"]
 
     if resume.get('full_name'):
@@ -366,17 +371,20 @@ def format_resume_details(resume: dict) -> str:
             lines.append(f"🎂 Дата рождения: {resume.get('birth_date')}")
     lines.append("")
 
-    # Contact
-    lines.append("<b>📞 КОНТАКТЫ</b>")
-    if resume.get('phone'):
-        lines.append(f"Телефон: {resume.get('phone')}")
-    if resume.get('email'):
-        lines.append(f"Email: {resume.get('email')}")
-    if resume.get('telegram'):
-        lines.append(f"Telegram: {resume.get('telegram')}")
-    if resume.get('other_contacts'):
-        lines.append(f"Доп. контакты: {resume.get('other_contacts')}")
-    lines.append("")
+    # Contact - only show if explicitly requested (e.g., after candidate accepted)
+    if show_contacts:
+        has_contacts = resume.get('phone') or resume.get('email') or resume.get('telegram')
+        if has_contacts:
+            lines.append("<b>📞 КОНТАКТЫ</b>")
+            if resume.get('phone'):
+                lines.append(f"Телефон: {resume.get('phone')}")
+            if resume.get('email'):
+                lines.append(f"Email: {resume.get('email')}")
+            if resume.get('telegram'):
+                lines.append(f"Telegram: {resume.get('telegram')}")
+            if resume.get('other_contacts'):
+                lines.append(f"Доп. контакты: {resume.get('other_contacts')}")
+            lines.append("")
 
     # Position
     lines.append("<b>💼 ЖЕЛАЕМАЯ ДОЛЖНОСТЬ</b>")

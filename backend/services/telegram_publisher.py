@@ -491,8 +491,7 @@ class TelegramPublisher:
                     photo=photo_ids[0],
                     caption=message_text,
                     parse_mode="HTML",
-                    reply_markup=keyboard,
-                    show_caption_above_media=True
+                    reply_markup=keyboard
                 )
                 logger.info(f"Published resume {resume.id} with photo to channel {channel}")
             else:

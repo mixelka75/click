@@ -11,7 +11,7 @@ from loguru import logger
 import httpx
 from datetime import datetime, timezone
 
-from backend.models import User, Resume
+from backend.models import User, Resume, get_resume_progress, delete_resume_progress
 from shared.constants import UserRole  # удалён ResumeStatus как неиспользуемый
 from config.settings import settings
 from bot.utils.formatters import format_date  # удалён format_salary_range
@@ -102,14 +102,47 @@ async def start_resume_creation(message: Message, state: FSMContext):
         )
         return
 
+    # Check for saved draft (progress recovery)
+    draft = await get_resume_progress(telegram_id)
+    if draft and draft.current_state and draft.full_name:
+        # Found saved progress - ask if user wants to continue
+        from aiogram.types import InlineKeyboardButton
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            InlineKeyboardButton(text="✅ Продолжить", callback_data="resume_draft:continue"),
+            InlineKeyboardButton(text="🗑 Начать заново", callback_data="resume_draft:new")
+        )
+
+        # Show what was saved
+        progress_info = f"• ФИО: {draft.full_name}"
+        if draft.city:
+            progress_info += f"\n• Город: {draft.city}"
+        if draft.phone:
+            progress_info += f"\n• Телефон: указан"
+        if draft.selected_positions:
+            progress_info += f"\n• Должности: {', '.join(draft.selected_positions[:2])}"
+        if draft.work_experience:
+            progress_info += f"\n• Опыт работы: {len(draft.work_experience)} записей"
+
+        await message.answer(
+            "📝 <b>Найден сохранённый прогресс!</b>\n\n"
+            f"У тебя есть незавершённое резюме:\n{progress_info}\n\n"
+            "Хочешь продолжить с того места, где остановился, "
+            "или начать создание резюме заново?",
+            reply_markup=builder.as_markup()
+        )
+        return
+
     logger.info(f"User {telegram_id} started resume creation")
 
     await state.set_data({})
 
     welcome_text = (
         "📝 <b>Создание резюме</b>\n\n"
-        "Хммм… 🤔 Вижу, ты решил создать ещё одно резюме.\n"
-        "Отлично! Тогда давай создадим его с нуля.\n\n"
+        "Хммм… 🤔 Вижу, ты у нас впервые.\n"
+        "Отлично! Тогда давай создадим твоё резюме с нуля.\n\n"
         "Я задам тебе несколько вопросов, чтобы собрать всю нужную информацию.\n"
         "Не переживай — всё просто и быстро.\n\n"
         "Ты можешь в любой момент:\n"
@@ -122,6 +155,214 @@ async def start_resume_creation(message: Message, state: FSMContext):
     await message.answer(welcome_text, reply_markup=get_cancel_keyboard())
     await state.set_state(ResumeCreationStates.full_name)
     logger.warning(f"🔥 resume_handlers set state to: {await state.get_state()}")
+
+
+@router.callback_query(F.data == "resume_draft:continue")
+async def continue_resume_draft(callback: CallbackQuery, state: FSMContext):
+    """Continue resume creation from saved draft."""
+    await callback.answer()
+    telegram_id = callback.from_user.id
+
+    # Get saved draft
+    draft = await get_resume_progress(telegram_id)
+    if not draft:
+        await callback.message.edit_text(
+            "❌ Черновик не найден. Начни создание резюме заново."
+        )
+        return
+
+    # Restore FSM data from draft
+    fsm_data = draft.to_fsm_data()
+    await state.set_data(fsm_data)
+
+    # Restore state
+    saved_state = draft.current_state
+    if saved_state and ":" in saved_state:
+        # Extract state class and name
+        try:
+            await state.set_state(saved_state)
+            logger.info(f"Restored state {saved_state} for user {telegram_id}")
+
+            # Show message about restoration and ask for next input
+            await callback.message.edit_text(
+                "✅ <b>Прогресс восстановлен!</b>\n\n"
+                "Продолжай с того места, где остановился.\n"
+                "Используй кнопки ниже для навигации.",
+                reply_markup=None
+            )
+
+            # Trigger the current state handler by sending appropriate message
+            # We need to show the prompt for current state
+            await _show_current_state_prompt(callback.message, state, saved_state)
+
+        except Exception as e:
+            logger.error(f"Error restoring state: {e}")
+            # Fallback: start from beginning with data preserved
+            await state.set_state(ResumeCreationStates.full_name)
+            await callback.message.edit_text(
+                "⚠️ Не удалось точно восстановить позицию.\n"
+                "Начнём с первого вопроса, но все данные сохранены.\n\n"
+                f"<b>Как тебя зовут?</b>\n"
+                f"Текущее значение: {draft.full_name or 'не указано'}",
+                reply_markup=None
+            )
+    else:
+        # No valid state, start from beginning
+        await state.set_state(ResumeCreationStates.full_name)
+        await callback.message.edit_text(
+            "📝 <b>Продолжаем создание резюме</b>\n\n"
+            f"<b>Как тебя зовут?</b>\n"
+            f"Текущее значение: {draft.full_name or 'не указано'}",
+            reply_markup=None
+        )
+
+
+@router.callback_query(F.data == "resume_draft:new")
+async def start_new_resume(callback: CallbackQuery, state: FSMContext):
+    """Discard draft and start new resume creation."""
+    await callback.answer()
+    telegram_id = callback.from_user.id
+
+    # Delete old draft
+    await delete_resume_progress(telegram_id)
+
+    # Clear state
+    await state.set_data({})
+
+    # Start fresh
+    welcome_text = (
+        "📝 <b>Создание резюме</b>\n\n"
+        "Хорошо! Начинаем с чистого листа.\n\n"
+        "Я задам тебе несколько вопросов, чтобы собрать всю нужную информацию.\n"
+        "Не переживай — всё просто и быстро.\n\n"
+        "Ты можешь в любой момент:\n"
+        "• нажать 🚫 Отменить создание\n"
+        "• пропустить необязательные шаги\n\n"
+        "Ну что, начнём?\n\n"
+        "<b>Как тебя зовут?</b> Напиши ФИО полностью"
+    )
+
+    await callback.message.edit_text(welcome_text, reply_markup=None)
+    await callback.message.answer("Жду твоё ФИО:", reply_markup=get_cancel_keyboard())
+    await state.set_state(ResumeCreationStates.full_name)
+
+
+async def _show_current_state_prompt(message: Message, state: FSMContext, state_name: str):
+    """Show appropriate prompt for the current state."""
+    from bot.keyboards.common import (
+        get_cancel_keyboard,
+        get_back_cancel_keyboard,
+        get_yes_no_keyboard,
+        get_skip_button,
+        get_city_selection_keyboard,
+    )
+    from bot.keyboards.positions import (
+        get_position_categories_keyboard,
+        get_work_schedule_keyboard,
+    )
+
+    # States that need special inline keyboards
+    inline_states = {
+        "ResumeCreationStates:city": (
+            "<b>В каком городе ты находишься?</b>",
+            get_city_selection_keyboard()
+        ),
+        "ResumeCreationStates:position_category": (
+            "<b>Какую должность ты ищешь?</b>\nВыбери категорию:",
+            get_position_categories_keyboard(show_back=True)
+        ),
+        "ResumeCreationStates:work_schedule": (
+            "<b>Какой график работы тебя интересует?</b>\nМожно выбрать несколько вариантов.",
+            get_work_schedule_keyboard([])
+        ),
+        "ResumeCreationStates:add_work_experience": (
+            "<b>Есть ли у тебя опыт работы?</b>",
+            get_yes_no_keyboard()
+        ),
+        "ResumeCreationStates:add_education": (
+            "<b>Добавим информацию об образовании?</b>",
+            get_yes_no_keyboard()
+        ),
+        "ResumeCreationStates:add_courses": (
+            "<b>Добавить курсы или сертификаты?</b>",
+            get_yes_no_keyboard()
+        ),
+        "ResumeCreationStates:add_languages": (
+            "<b>Добавить владение иностранными языками?</b>",
+            get_yes_no_keyboard()
+        ),
+        "ResumeCreationStates:ready_to_relocate": (
+            "<b>Готов ли ты переехать в другой город?</b>",
+            get_yes_no_keyboard(show_back=True)
+        ),
+    }
+
+    # States with reply keyboards only
+    reply_states = {
+        "ResumeCreationStates:full_name": (
+            "<b>Как тебя зовут?</b> Напиши ФИО полностью",
+            get_cancel_keyboard()
+        ),
+        "ResumeCreationStates:citizenship": (
+            "<b>Укажи своё гражданство</b>\nНапример: Россия",
+            get_back_cancel_keyboard()
+        ),
+        "ResumeCreationStates:birth_date": (
+            "<b>Введи свою дату рождения</b>\nФормат: ДД.ММ.ГГГГ (например: 01.01.2000)",
+            get_back_cancel_keyboard()
+        ),
+        "ResumeCreationStates:city_custom": (
+            "<b>Напиши название своего города:</b>",
+            get_back_cancel_keyboard()
+        ),
+        "ResumeCreationStates:phone": (
+            "<b>Укажи номер телефона</b>\nФормат: +79001234567 или 89001234567",
+            get_back_cancel_keyboard()
+        ),
+        "ResumeCreationStates:photo": (
+            "📸 <b>Добавь фото для резюме</b>\nОтправь фотографию.",
+            get_cancel_keyboard()
+        ),
+    }
+
+    # States with skip inline button
+    skip_states = {
+        "ResumeCreationStates:email": (
+            "<b>Укажи свой email</b>\n(или нажми кнопку ниже, чтобы пропустить)",
+            get_skip_button()
+        ),
+        "ResumeCreationStates:desired_salary": (
+            "<b>Какую зарплату ты хочешь получать?</b>\nУкажи сумму в рублях (например: 80000)",
+            get_skip_button()
+        ),
+        "ResumeCreationStates:about": (
+            "<b>Расскажи немного о себе</b>\nНапример: «Ответственный, пунктуальный»",
+            get_skip_button()
+        ),
+    }
+
+    # First, always send reply keyboard for navigation
+    await message.answer(
+        "Используй кнопки ниже для навигации:",
+        reply_markup=get_back_cancel_keyboard()
+    )
+
+    # Check inline states first
+    if state_name in inline_states:
+        text, inline_kb = inline_states[state_name]
+        await message.answer(text, reply_markup=inline_kb)
+    elif state_name in reply_states:
+        text, reply_kb = reply_states[state_name]
+        await message.answer(text, reply_markup=reply_kb)
+    elif state_name in skip_states:
+        text, skip_kb = skip_states[state_name]
+        await message.answer(text, reply_markup=skip_kb)
+    else:
+        # Unknown state - show generic message
+        await message.answer(
+            "Продолжай с того места, где остановился.\n"
+            "Введи нужные данные или используй кнопки."
+        )
 
 
 # ============ RESUME MANAGEMENT ============

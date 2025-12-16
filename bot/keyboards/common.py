@@ -67,13 +67,15 @@ def get_main_menu_employer() -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True)
 
 
-def get_yes_no_keyboard() -> InlineKeyboardMarkup:
-    """Simple Yes/No keyboard."""
+def get_yes_no_keyboard(show_back: bool = False) -> InlineKeyboardMarkup:
+    """Simple Yes/No keyboard with optional back button."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="✅ Да", callback_data="confirm:yes"),
         InlineKeyboardButton(text="❌ Нет", callback_data="confirm:no")
     )
+    if show_back:
+        builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="confirm:back"))
     return builder.as_markup()
 
 
@@ -160,7 +162,7 @@ def get_confirm_telegram_keyboard() -> InlineKeyboardMarkup:
 
 # ==================== NEW KEYBOARDS ====================
 
-def get_city_selection_keyboard() -> InlineKeyboardMarkup:
+def get_city_selection_keyboard(show_back: bool = True) -> InlineKeyboardMarkup:
     """Keyboard for city selection with 4 preset options + custom."""
     from shared.constants import PRESET_CITIES
 
@@ -180,6 +182,13 @@ def get_city_selection_keyboard() -> InlineKeyboardMarkup:
         text="🏙 Другой город",
         callback_data="city_select:custom"
     ))
+
+    # Add back button
+    if show_back:
+        builder.row(InlineKeyboardButton(
+            text="◀️ Назад",
+            callback_data="city_select:back"
+        ))
 
     return builder.as_markup()
 

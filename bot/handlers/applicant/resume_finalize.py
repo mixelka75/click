@@ -17,7 +17,7 @@ from bot.keyboards.common import (
     get_photo_continue_keyboard,
 )
 from bot.utils.formatters import format_resume_preview
-from backend.models import User
+from backend.models import User, delete_resume_progress
 from config.settings import settings
 
 
@@ -364,6 +364,10 @@ async def publish_resume(callback: CallbackQuery, state: FSMContext):
                     )
 
                     logger.info(f"Resume {resume_id} published for user {telegram_id}")
+
+                    # Delete draft after successful publication
+                    await delete_resume_progress(telegram_id)
+                    logger.info(f"Deleted resume draft for user {telegram_id}")
                 else:
                     await callback.message.answer(
                         "✅ Резюме создано, но возникла ошибка при публикации в канал.\n"

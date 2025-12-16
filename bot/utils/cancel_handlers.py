@@ -6,13 +6,18 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 from loguru import logger
 
-from backend.models import User
+from backend.models import User, delete_resume_progress, delete_vacancy_progress
 
 
 async def handle_cancel_resume(message: Message, state: FSMContext):
     """Handle resume creation cancellation."""
     data = await state.get_data()
     is_first_resume = data.get("first_resume", False)
+    telegram_id = message.from_user.id
+
+    # Delete draft from MongoDB
+    await delete_resume_progress(telegram_id)
+    logger.info(f"Deleted resume draft for user {telegram_id}")
 
     await state.clear()
 
@@ -41,6 +46,11 @@ async def handle_cancel_vacancy(message: Message, state: FSMContext):
     """Handle vacancy creation cancellation."""
     data = await state.get_data()
     is_first_vacancy = data.get("first_vacancy", False)
+    telegram_id = message.from_user.id
+
+    # Delete draft from MongoDB
+    await delete_vacancy_progress(telegram_id)
+    logger.info(f"Deleted vacancy draft for user {telegram_id}")
 
     await state.clear()
 

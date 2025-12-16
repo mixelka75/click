@@ -22,7 +22,7 @@ from shared.constants import (
 from typing import Dict
 
 
-def get_position_categories_keyboard() -> InlineKeyboardMarkup:
+def get_position_categories_keyboard(show_back: bool = False) -> InlineKeyboardMarkup:
     """Keyboard for selecting position category."""
     builder = InlineKeyboardBuilder()
 
@@ -34,6 +34,13 @@ def get_position_categories_keyboard() -> InlineKeyboardMarkup:
 
     # Arrange in 2 columns
     builder.adjust(2)
+
+    if show_back:
+        builder.row(InlineKeyboardButton(
+            text="◀️ Назад",
+            callback_data="position_cat:back"
+        ))
+
     return builder.as_markup()
 
 
@@ -135,7 +142,7 @@ def get_cuisines_keyboard(selected_cuisines: List[str] = None) -> InlineKeyboard
     return builder.as_markup()
 
 
-def get_work_schedule_keyboard(selected: List[str] = None) -> InlineKeyboardMarkup:
+def get_work_schedule_keyboard(selected: List[str] = None, show_back: bool = True) -> InlineKeyboardMarkup:
     """Keyboard for selecting work schedules (multiple choice)."""
     from shared.constants import WORK_SCHEDULES
 
@@ -158,6 +165,13 @@ def get_work_schedule_keyboard(selected: List[str] = None) -> InlineKeyboardMark
         builder.row(InlineKeyboardButton(
             text="✅ Готово",
             callback_data="schedule:done"
+        ))
+
+    # Add back button
+    if show_back:
+        builder.row(InlineKeyboardButton(
+            text="◀️ Назад",
+            callback_data="schedule:back"
         ))
 
     return builder.as_markup()

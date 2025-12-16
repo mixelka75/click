@@ -4,19 +4,26 @@ Telegram Bot main entry point.
 
 import asyncio
 import sys
+from datetime import timedelta
 from loguru import logger
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.fsm.storage.redis import RedisStorage, DefaultKeyBuilder
 
 from config.settings import settings
 from backend.database import mongodb
 
 # Import middlewares
-from bot.middlewares import StateResetMiddleware
+from bot.middlewares import (
+    StateResetMiddleware,
+    AutoRecoveryMiddleware,
+    CallbackAutoRecoveryMiddleware,
+    ProgressSaverMiddleware,
+    CallbackProgressSaverMiddleware,
+)
 
 # Import handlers
-from bot.handlers.common import start, help_handler, statistics, favorites, profile, chat, complaint, moderation
+from bot.handlers.common import start, help_handler, statistics, favorites, profile, chat, complaint, moderation, fallback
 # Replace package-level imports with direct module imports to avoid circular import issues
 import bot.handlers.applicant.resume_handlers as resume_handlers
 import bot.handlers.applicant.resume_creation as resume_creation
@@ -89,8 +96,16 @@ async def main():
         parse_mode=ParseMode.HTML
     )
 
-    # Initialize Redis storage for FSM
-    storage = RedisStorage.from_url(settings.redis_url)
+    # Initialize Redis storage for FSM with extended TTL (default 48 hours)
+    # This prevents state loss after periods of inactivity
+    fsm_ttl = timedelta(hours=settings.redis_fsm_ttl_hours)
+    storage = RedisStorage.from_url(
+        settings.redis_url,
+        key_builder=DefaultKeyBuilder(with_destiny=True),
+        state_ttl=fsm_ttl,
+        data_ttl=fsm_ttl,
+    )
+    logger.info(f"FSM storage initialized with TTL: {settings.redis_fsm_ttl_hours} hours")
 
     # Initialize dispatcher
     dp = Dispatcher(storage=storage)
@@ -115,6 +130,8 @@ async def main():
     # Register middlewares
     dp.message.middleware(DebugMiddleware())
     dp.message.middleware(StateResetMiddleware())
+    dp.message.middleware(AutoRecoveryMiddleware())  # Auto-recovery after 3 stuck actions
+    dp.message.middleware(ProgressSaverMiddleware())  # Save progress to MongoDB
 
     # Add callback debug middleware
     from aiogram.types import CallbackQuery
@@ -135,6 +152,8 @@ async def main():
             return result
 
     dp.callback_query.middleware(CallbackDebugMiddleware())
+    dp.callback_query.middleware(CallbackAutoRecoveryMiddleware())  # Auto-recovery for callbacks
+    dp.callback_query.middleware(CallbackProgressSaverMiddleware())  # Save progress to MongoDB
 
     # Register startup/shutdown handlers
     dp.startup.register(on_startup)
@@ -184,6 +203,10 @@ async def main():
     logger.warning("🔥 Including resume_handlers router AFTER creation")
     dp.include_router(resume_handlers.router)
     dp.include_router(vacancy_handlers.router)
+
+    # Fallback handlers (MUST BE LAST - catches unhandled navigation buttons)
+    logger.warning("🔥 Including fallback router LAST")
+    dp.include_router(fallback.router)
 
     # Start polling
     try:

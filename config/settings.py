@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     redis_port: int = Field(default=6379, description="Redis port")
     redis_db: int = Field(default=0, description="Redis database number")
     redis_password: Optional[str] = Field(default=None, description="Redis password")
+    redis_fsm_ttl_hours: int = Field(default=48, description="FSM state TTL in hours (default 48h)")
 
     # Celery
     celery_broker_url: str = Field(default="redis://localhost:6379/1", description="Celery broker URL")

@@ -17,6 +17,16 @@ router = Router()
 router.message.filter(IsNotMenuButton())
 
 
+async def _handle_cancel_vacancy(message: Message, state: FSMContext):
+    """Common cancel handler for vacancy creation."""
+    await state.clear()
+    from bot.keyboards.common import get_main_menu_employer
+    await message.answer(
+        "❌ Создание вакансии отменено.",
+        reply_markup=get_main_menu_employer()
+    )
+
+
 async def ask_salary_min(message: Message, state: FSMContext):
     """Ask for minimum salary."""
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -37,6 +47,22 @@ async def ask_salary_min(message: Message, state: FSMContext):
 @router.message(VacancyCreationStates.salary_min)
 async def process_salary_min(message: Message, state: FSMContext):
     """Process minimum salary."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to location (city selection)
+        from bot.handlers.employer.vacancy_creation import get_city_selection_keyboard
+        await message.answer(
+            "📍 <b>Местоположение</b>\n\n"
+            "В каком городе находится вакансия?",
+            reply_markup=get_city_selection_keyboard()
+        )
+        from bot.states.vacancy_states import VacancyCreationStates
+        await state.set_state(VacancyCreationStates.city)
+        return
+
     try:
         salary_min = int(message.text.strip())
         if salary_min < 0:
@@ -82,6 +108,24 @@ async def process_salary_negotiable(callback: CallbackQuery, state: FSMContext):
 @router.message(VacancyCreationStates.salary_max)
 async def process_salary_max(message: Message, state: FSMContext):
     """Process maximum salary."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💰 По договоренности", callback_data="salary_min:negotiable")]
+        ])
+        await message.answer(
+            "💰 <b>Укажите условия оплаты</b>\n\n"
+            "Введите <b>минимальную</b> зарплату (в рублях):\n"
+            "Или выберите 'По договоренности'",
+            reply_markup=keyboard
+        )
+        await state.set_state(VacancyCreationStates.salary_min)
+        return
+
     text = message.text.strip()
 
     if text == '-':
@@ -517,6 +561,18 @@ async def process_probation_period(callback: CallbackQuery, state: FSMContext):
 @router.message(VacancyCreationStates.probation_duration)
 async def process_probation_duration(message: Message, state: FSMContext):
     """Process probation duration."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Есть ли испытательный срок?</b>",
+            reply_markup=get_yes_no_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.has_probation_period)
+        return
+
     duration = message.text.strip()
 
     if len(duration) < 2:
@@ -646,6 +702,22 @@ async def process_benefits_skip(callback: CallbackQuery, state: FSMContext):
 @router.message(VacancyCreationStates.required_documents)
 async def process_required_documents(message: Message, state: FSMContext):
     """Process required documents."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        data = await state.get_data()
+        benefits = data.get("benefits", [])
+        await message.answer(
+            "<b>✨ МЫ ПРЕДЛАГАЕМ</b>\n\n"
+            "Выберите дополнительные преимущества:\n"
+            "(можно выбрать несколько или пропустить)",
+            reply_markup=get_benefits_keyboard(selected_benefits=benefits)
+        )
+        await state.set_state(VacancyCreationStates.benefits)
+        return
+
     text = message.text.strip()
 
     if text != '-':
@@ -663,3 +735,233 @@ async def process_required_documents(message: Message, state: FSMContext):
     # Import here to avoid circular imports
     from bot.handlers.employer.vacancy_finalize import ask_description
     await ask_description(message, state)
+
+
+# ============ TEXT HANDLERS FOR INLINE STATES (BACK/CANCEL) ============
+
+@router.message(VacancyCreationStates.salary_type)
+async def process_salary_type_text(message: Message, state: FSMContext):
+    """Handle text input in salary type state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to salary max
+        await message.answer(
+            "<b>Введите максимальную зарплату:</b>\n"
+            "(или '-' если только минимальная)"
+        )
+        await state.set_state(VacancyCreationStates.salary_max)
+        return
+    await message.answer(
+        "Пожалуйста, выберите период выплаты, используя кнопки выше.",
+        reply_markup=get_salary_type_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.employment_type)
+async def process_employment_type_text(message: Message, state: FSMContext):
+    """Handle text input in employment type state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to salary type or min depending on flow
+        data = await state.get_data()
+        if data.get("salary_type") == SalaryType.NEGOTIABLE:
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💰 По договоренности", callback_data="salary_min:negotiable")]
+            ])
+            await message.answer(
+                "💰 <b>Укажите условия оплаты</b>\n\n"
+                "Введите <b>минимальную</b> зарплату (в рублях):\n"
+                "Или выберите 'По договоренности'",
+                reply_markup=keyboard
+            )
+            await state.set_state(VacancyCreationStates.salary_min)
+        else:
+            await message.answer(
+                "<b>Выберите период выплаты:</b>",
+                reply_markup=get_salary_type_keyboard()
+            )
+            await state.set_state(VacancyCreationStates.salary_type)
+        return
+    await message.answer(
+        "Пожалуйста, выберите тип занятости, используя кнопки выше.",
+        reply_markup=get_employment_type_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.work_schedule)
+async def process_work_schedule_text(message: Message, state: FSMContext):
+    """Handle text input in work schedule state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Выберите тип занятости:</b>",
+            reply_markup=get_employment_type_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.employment_type)
+        return
+    data = await state.get_data()
+    schedules = data.get("work_schedule", [])
+    await message.answer(
+        "Пожалуйста, выберите график работы, используя кнопки выше.",
+        reply_markup=get_work_schedule_keyboard(selected_schedules=schedules)
+    )
+
+
+@router.message(VacancyCreationStates.required_experience)
+async def process_required_experience_text(message: Message, state: FSMContext):
+    """Handle text input in required experience state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        data = await state.get_data()
+        schedules = data.get("work_schedule", [])
+        await message.answer(
+            "<b>Выберите график работы:</b>\n"
+            "(можно выбрать несколько)",
+            reply_markup=get_work_schedule_keyboard(selected_schedules=schedules)
+        )
+        await state.set_state(VacancyCreationStates.work_schedule)
+        return
+    await message.answer(
+        "Пожалуйста, выберите требуемый опыт, используя кнопки выше.",
+        reply_markup=get_experience_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.required_education)
+async def process_required_education_text(message: Message, state: FSMContext):
+    """Handle text input in required education state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Какой опыт работы требуется?</b>",
+            reply_markup=get_experience_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.required_experience)
+        return
+    await message.answer(
+        "Пожалуйста, выберите требования к образованию, используя кнопки выше.",
+        reply_markup=get_education_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.required_skills)
+async def process_required_skills_text(message: Message, state: FSMContext):
+    """Handle text input in required skills state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Какое образование требуется?</b>",
+            reply_markup=get_education_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.required_education)
+        return
+    data = await state.get_data()
+    category = data.get("position_category")
+    skills = data.get("required_skills", [])
+    await message.answer(
+        "Пожалуйста, выберите навыки, используя кнопки выше.",
+        reply_markup=get_skills_keyboard(category, skills)
+    )
+
+
+@router.message(VacancyCreationStates.has_employment_contract)
+async def process_has_employment_contract_text(message: Message, state: FSMContext):
+    """Handle text input in employment contract state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        data = await state.get_data()
+        category = data.get("position_category")
+        skills = data.get("required_skills", [])
+        await message.answer(
+            "<b>Выберите необходимые навыки:</b>\n"
+            "(можно выбрать несколько или пропустить)",
+            reply_markup=get_skills_keyboard(category, skills)
+        )
+        await state.set_state(VacancyCreationStates.required_skills)
+        return
+    await message.answer(
+        "Пожалуйста, ответьте на вопрос, используя кнопки выше.",
+        reply_markup=get_yes_no_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.has_probation_period)
+async def process_has_probation_period_text(message: Message, state: FSMContext):
+    """Handle text input in probation period state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Предусмотрен ли трудовой договор?</b>",
+            reply_markup=get_yes_no_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.has_employment_contract)
+        return
+    await message.answer(
+        "Пожалуйста, ответьте на вопрос, используя кнопки выше.",
+        reply_markup=get_yes_no_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.allows_remote_work)
+async def process_allows_remote_work_text(message: Message, state: FSMContext):
+    """Handle text input in remote work state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        data = await state.get_data()
+        if data.get("has_probation_period"):
+            await message.answer(
+                "<b>Какова длительность испытательного срока?</b>\n"
+                "(например: '1 месяц', '3 месяца')"
+            )
+            await state.set_state(VacancyCreationStates.probation_duration)
+        else:
+            await message.answer(
+                "<b>Есть ли испытательный срок?</b>",
+                reply_markup=get_yes_no_keyboard()
+            )
+            await state.set_state(VacancyCreationStates.has_probation_period)
+        return
+    await message.answer(
+        "Пожалуйста, ответьте на вопрос, используя кнопки выше.",
+        reply_markup=get_yes_no_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.benefits)
+async def process_benefits_text(message: Message, state: FSMContext):
+    """Handle text input in benefits state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Возможна ли удаленная работа?</b>",
+            reply_markup=get_yes_no_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.allows_remote_work)
+        return
+    data = await state.get_data()
+    benefits = data.get("benefits", [])
+    await message.answer(
+        "Пожалуйста, выберите преимущества, используя кнопки выше.",
+        reply_markup=get_benefits_keyboard(selected_benefits=benefits)
+    )

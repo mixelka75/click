@@ -19,6 +19,16 @@ router = Router()
 router.message.filter(IsNotMenuButton())
 
 
+async def _handle_cancel_vacancy(message: Message, state: FSMContext):
+    """Common cancel handler for vacancy creation."""
+    await state.clear()
+    from bot.keyboards.common import get_main_menu_employer
+    await message.answer(
+        "❌ Создание вакансии отменено.",
+        reply_markup=get_main_menu_employer()
+    )
+
+
 async def ask_description(message: Message, state: FSMContext):
     """Ask for vacancy description."""
     await message.answer(
@@ -32,6 +42,20 @@ async def ask_description(message: Message, state: FSMContext):
 @router.message(VacancyCreationStates.description)
 async def process_description(message: Message, state: FSMContext):
     """Process vacancy description."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to required documents
+        await message.answer(
+            "<b>Какие документы нужно предоставить при устройстве?</b>\n"
+            "(например: паспорт, медкнижка, ИНН)\n\n"
+            "Каждый документ с новой строки, или введите '-'"
+        )
+        await state.set_state(VacancyCreationStates.required_documents)
+        return
+
     description = message.text.strip()
 
     if len(description) < 20:
@@ -54,6 +78,20 @@ async def process_description(message: Message, state: FSMContext):
 @router.message(VacancyCreationStates.responsibilities)
 async def process_responsibilities(message: Message, state: FSMContext):
     """Process job responsibilities."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to description
+        await message.answer(
+            "📝 <b>Опишите вакансию</b>\n\n"
+            "Напишите общее описание вакансии:\n"
+            "(что ожидает кандидата, особенности работы)"
+        )
+        await state.set_state(VacancyCreationStates.description)
+        return
+
     text = message.text.strip()
 
     if len(text) < 10:
@@ -347,3 +385,63 @@ async def process_publish_cancel(callback: CallbackQuery, state: FSMContext):
     # Clear state
     await state.clear()
     logger.info(f"User {callback.from_user.id} cancelled vacancy creation")
+
+
+# ============ TEXT HANDLERS FOR INLINE STATES (BACK/CANCEL) ============
+
+@router.message(VacancyCreationStates.is_anonymous)
+async def process_is_anonymous_text(message: Message, state: FSMContext):
+    """Handle text input in is_anonymous state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Укажите основные обязанности:</b>\n"
+            "(каждая обязанность с новой строки)"
+        )
+        await state.set_state(VacancyCreationStates.responsibilities)
+        return
+    await message.answer(
+        "Пожалуйста, ответьте на вопрос, используя кнопки выше.",
+        reply_markup=get_yes_no_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.publication_duration_days)
+async def process_publication_duration_text(message: Message, state: FSMContext):
+    """Handle text input in publication_duration_days state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Публиковать вакансию анонимно?</b>\n"
+            "(без указания названия компании и контактов)",
+            reply_markup=get_yes_no_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.is_anonymous)
+        return
+    await message.answer(
+        "Пожалуйста, выберите срок публикации, используя кнопки выше.",
+        reply_markup=get_publication_duration_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.confirm_publish)
+async def process_confirm_publish_text(message: Message, state: FSMContext):
+    """Handle text input in confirm_publish state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>На сколько дней опубликовать вакансию?</b>",
+            reply_markup=get_publication_duration_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.publication_duration_days)
+        return
+    await message.answer(
+        "Пожалуйста, подтвердите публикацию, используя кнопки выше.",
+        reply_markup=get_confirm_publish_keyboard()
+    )

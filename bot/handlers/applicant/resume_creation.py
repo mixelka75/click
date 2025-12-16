@@ -159,6 +159,21 @@ async def process_city_selection(callback: CallbackQuery, state: FSMContext):
 
     city_value = callback.data.split(":", 1)[1]
 
+    # Handle back button
+    if city_value == "back":
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await callback.message.answer(
+            "<b>Введи свою дату рождения</b>\n"
+            "Формат: например: 01.01.2000",
+            reply_markup=get_back_cancel_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.birth_date)
+        return
+
     if city_value == "custom":
         # User wants to enter custom city
         try:
@@ -186,7 +201,7 @@ async def process_city_selection(callback: CallbackQuery, state: FSMContext):
         "<b>Готов ли ты переехать в другой город?</b>\n"
         "Если да — я смогу подбирать для тебя интересные вакансии "
         "не только в твоём городе, но и по всей России.",
-        reply_markup=get_yes_no_keyboard()
+        reply_markup=get_yes_no_keyboard(show_back=True)
     )
     await state.set_state(ResumeCreationStates.ready_to_relocate)
 
@@ -219,7 +234,7 @@ async def process_city_text(message: Message, state: FSMContext):
         "<b>Готов ли ты переехать в другой город?</b>\n"
         "Если да — я смогу подбирать для тебя интересные вакансии "
         "не только в твоём городе, но и по всей России.",
-        reply_markup=get_yes_no_keyboard()
+        reply_markup=get_yes_no_keyboard(show_back=True)
     )
     await state.set_state(ResumeCreationStates.ready_to_relocate)
 
@@ -251,7 +266,7 @@ async def process_city_custom(message: Message, state: FSMContext):
         "<b>Готов ли ты переехать в другой город?</b>\n"
         "Если да — я смогу подбирать для тебя интересные вакансии "
         "не только в твоём городе, но и по всей России.",
-        reply_markup=get_yes_no_keyboard()
+        reply_markup=get_yes_no_keyboard(show_back=True)
     )
     await state.set_state(ResumeCreationStates.ready_to_relocate)
 
@@ -262,6 +277,20 @@ async def process_city_custom(message: Message, state: FSMContext):
 async def process_relocate(callback: CallbackQuery, state: FSMContext):
     """Process ready to relocate."""
     await callback.answer()
+
+    # Handle back button
+    if callback.data == "confirm:back":
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await callback.message.answer(
+            "<b>В каком городе ты находишься?</b>",
+            reply_markup=get_city_selection_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.city)
+        return
 
     ready = callback.data == "confirm:yes"
     await state.update_data(ready_to_relocate=ready)
@@ -575,7 +604,7 @@ async def _proceed_to_position_selection(message: Message, state: FSMContext):
     await message.answer(
         "<b>Какую должность ты ищешь?</b>\n\n"
         "Выбери категории, чтобы я мог подобрать вакансии максимально точно.",
-        reply_markup=get_position_categories_keyboard()
+        reply_markup=get_position_categories_keyboard(show_back=True)
     )
     await state.set_state(ResumeCreationStates.position_category)
 
@@ -588,6 +617,22 @@ async def process_position_category(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
     category = callback.data.split(":")[1]
+
+    # Handle back button
+    if category == "back":
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        await callback.message.answer(
+            "<b>Укажи свой email</b> 📧\n"
+            "(или нажми кнопку ниже, чтобы пропустить)",
+            reply_markup=get_skip_button()
+        )
+        await state.set_state(ResumeCreationStates.email)
+        return
+
     await state.update_data(current_category=category, current_category_positions=[])
 
     # If OTHER category selected, go directly to custom position input
@@ -1084,6 +1129,24 @@ async def process_work_schedule(callback: CallbackQuery, state: FSMContext):
 
     action = callback.data.split(":")[1]
 
+    # Handle back button
+    if action == "back":
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        # Go back to salary
+        await callback.message.answer(
+            "💰 <b>Ожидаемая зарплата</b>\n\n"
+            "Какую зарплату ты хотел бы получать?\n"
+            "Напиши число или диапазон, например: 80000 или 60000-80000\n"
+            "(или нажми кнопку ниже, чтобы пропустить)",
+            reply_markup=get_skip_button()
+        )
+        await state.set_state(ResumeCreationStates.desired_salary)
+        return
+
     if action == "done":
         # Finish schedule selection
         try:
@@ -1120,3 +1183,74 @@ async def process_work_schedule(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(
             reply_markup=get_work_schedule_keyboard(selected)
         )
+
+
+# ============ TEXT HANDLERS FOR INLINE STATES ============
+# These handle text input (Back/Cancel buttons) in states that expect inline callbacks
+
+@router.message(ResumeCreationStates.position_category)
+async def process_position_category_text(message: Message, state: FSMContext):
+    """Handle text input in position category selection."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Укажи свой email</b> 📧\n"
+            "(или нажми кнопку ниже, чтобы пропустить)",
+            reply_markup=get_skip_button()
+        )
+        await state.set_state(ResumeCreationStates.email)
+        return
+
+    # Ignore other text - user should use buttons
+    await message.answer(
+        "Пожалуйста, выбери категорию из кнопок выше.",
+        reply_markup=get_position_categories_keyboard(show_back=True)
+    )
+
+
+@router.message(ResumeCreationStates.positions_in_category)
+async def process_positions_in_category_text(message: Message, state: FSMContext):
+    """Handle text input in position selection within category."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Какую должность ты ищешь?</b>\n\n"
+            "Выбери категории:",
+            reply_markup=get_position_categories_keyboard(show_back=True)
+        )
+        await state.set_state(ResumeCreationStates.position_category)
+        return
+
+
+@router.message(ResumeCreationStates.work_schedule)
+async def process_work_schedule_text(message: Message, state: FSMContext):
+    """Handle text input in work schedule selection."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "💰 <b>Ожидаемая зарплата</b>\n\n"
+            "Какую зарплату ты хотел бы получать?\n"
+            "Напиши число или диапазон, например: 80000 или 60000-80000\n"
+            "(или нажми кнопку ниже, чтобы пропустить)",
+            reply_markup=get_skip_button()
+        )
+        await state.set_state(ResumeCreationStates.desired_salary)
+        return
+
+    # Ignore other text - user should use buttons
+    data = await state.get_data()
+    selected = data.get("work_schedule", [])
+    from bot.keyboards.positions import get_work_schedule_keyboard
+    await message.answer(
+        "Пожалуйста, выбери график из кнопок выше.",
+        reply_markup=get_work_schedule_keyboard(selected)
+    )

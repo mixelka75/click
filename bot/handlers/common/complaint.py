@@ -76,17 +76,20 @@ def get_complaint_reasons_keyboard(
         else RESUME_COMPLAINT_REASONS
     )
 
+    # Short type code for callback_data (Telegram limit 64 bytes)
+    type_code = "v" if complaint_type == ComplaintType.VACANCY else "r"
+
     for code, text in reasons:
-        # Callback format: complaint_reason:{type}:{target_id}:{reason_code}
+        # Callback format: cr:{v|r}:{target_id}:{reason_code}
         builder.row(
             InlineKeyboardButton(
                 text=text,
-                callback_data=f"complaint_reason:{complaint_type.value}:{target_id}:{code}"
+                callback_data=f"cr:{type_code}:{target_id}:{code}"
             )
         )
 
     builder.row(
-        InlineKeyboardButton(text="❌ Отмена", callback_data="complaint_cancel")
+        InlineKeyboardButton(text="❌ Отмена", callback_data="cr_cancel")
     )
 
     return builder
@@ -129,11 +132,17 @@ async def start_vacancy_report(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer("Вакансия не найдена")
         return
 
+    # Check if user is trying to report their own vacancy
+    author_id = str(vacancy.user.ref.id) if vacancy.user else None
+    if author_id and str(user.id) == author_id:
+        await callback.message.answer("❌ Нельзя пожаловаться на свою собственную вакансию.")
+        return
+
     # Save to state
     await state.update_data(
         complaint_type=ComplaintType.VACANCY.value,
         complaint_target_id=vacancy_id,
-        complaint_target_author_id=str(vacancy.user.ref.id) if vacancy.user else None
+        complaint_target_author_id=author_id
     )
 
     # Show reasons
@@ -180,11 +189,17 @@ async def start_resume_report(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer("Резюме не найдено")
         return
 
+    # Check if user is trying to report their own resume
+    author_id = str(resume.user.ref.id) if resume.user else None
+    if author_id and str(user.id) == author_id:
+        await callback.message.answer("❌ Нельзя пожаловаться на своё собственное резюме.")
+        return
+
     # Save to state
     await state.update_data(
         complaint_type=ComplaintType.RESUME.value,
         complaint_target_id=resume_id,
-        complaint_target_author_id=str(resume.user.ref.id) if resume.user else None
+        complaint_target_author_id=author_id
     )
 
     # Show reasons
@@ -248,6 +263,11 @@ async def handle_report_deep_link(
         author_id = str(target.user.ref.id) if target.user else None
         type_text = "резюме"
 
+    # Check if user is trying to report their own content
+    if author_id and str(user.id) == author_id:
+        await message.answer("❌ Нельзя пожаловаться на своё собственное объявление.")
+        return
+
     # Save to state
     await state.update_data(
         complaint_type=complaint_type.value,
@@ -270,16 +290,19 @@ async def handle_report_deep_link(
 # REASON SELECTION
 # ============================================================================
 
-@router.callback_query(F.data.startswith("complaint_reason:"))
+@router.callback_query(F.data.startswith("cr:"))
 async def select_complaint_reason(callback: CallbackQuery, state: FSMContext):
     """Handle reason selection."""
     await callback.answer()
 
     parts = callback.data.split(":")
-    # complaint_reason:{type}:{target_id}:{reason_code}
-    complaint_type = parts[1]
+    # cr:{v|r}:{target_id}:{reason_code}
+    type_code = parts[1]
     target_id = parts[2]
     reason_code = parts[3]
+
+    # Convert short code to full type
+    complaint_type = "vacancy" if type_code == "v" else "resume"
 
     # Get reason text
     reasons = (
@@ -436,7 +459,7 @@ async def submit_complaint(callback: CallbackQuery, state: FSMContext, bot: Bot)
     await state.clear()
 
 
-@router.callback_query(F.data == "complaint_cancel")
+@router.callback_query(F.data == "cr_cancel")
 async def cancel_complaint(callback: CallbackQuery, state: FSMContext):
     """Cancel complaint submission."""
     await callback.answer("Отменено")

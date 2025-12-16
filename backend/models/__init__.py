@@ -17,6 +17,16 @@ from .publication import Publication, PublicationType, Analytics
 from .favorite import Favorite
 from .chat import Chat, Message
 from .complaint import Complaint, ReporterBan, ComplaintStats
+from .draft import (
+    DraftResume,
+    DraftVacancy,
+    save_resume_progress,
+    get_resume_progress,
+    delete_resume_progress,
+    save_vacancy_progress,
+    get_vacancy_progress,
+    delete_vacancy_progress,
+)
 
 __all__ = [
     # User models
@@ -46,6 +56,15 @@ __all__ = [
     "Complaint",
     "ReporterBan",
     "ComplaintStats",
+    # Draft models (for saving progress)
+    "DraftResume",
+    "DraftVacancy",
+    "save_resume_progress",
+    "get_resume_progress",
+    "delete_resume_progress",
+    "save_vacancy_progress",
+    "get_vacancy_progress",
+    "delete_vacancy_progress",
 ]
 
 
@@ -63,4 +82,6 @@ DOCUMENT_MODELS = [
     Complaint,
     ReporterBan,
     ComplaintStats,
+    DraftResume,
+    DraftVacancy,
 ]

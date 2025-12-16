@@ -27,6 +27,8 @@ router = Router()
 @router.message(F.text == "📝 Создать вакансию")
 async def start_vacancy_creation(message: Message, state: FSMContext):
     """Start vacancy creation process."""
+    from bot.keyboards.common import get_back_cancel_keyboard
+
     telegram_id = message.from_user.id
     user = await User.find_one(User.telegram_id == telegram_id)
 
@@ -38,17 +40,18 @@ async def start_vacancy_creation(message: Message, state: FSMContext):
 
     await state.set_data({})
 
-    welcome_text = (
+    # First send reply keyboard with back/cancel buttons
+    await message.answer(
         "📝 <b>Создание вакансии</b>\n\n"
         "Отлично! Давайте создадим вакансию.\n"
-        "Я буду задавать вам вопросы шаг за шагом.\n\n"
-        "Вы можете в любой момент использовать /cancel для отмены.\n\n"
-        "<b>На какую должность вы ищете сотрудника?</b>\n"
-        "Выберите категорию:"
+        "Я буду задавать вам вопросы шаг за шагом.",
+        reply_markup=get_back_cancel_keyboard()
     )
 
+    # Then send inline keyboard for category selection
     await message.answer(
-        welcome_text,
+        "<b>На какую должность вы ищете сотрудника?</b>\n"
+        "Выберите категорию:",
         reply_markup=get_position_categories_keyboard()
     )
     await state.set_state(VacancyCreationStates.position_category)

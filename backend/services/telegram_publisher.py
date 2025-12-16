@@ -456,7 +456,8 @@ class TelegramPublisher:
                 photo_ids = [resume.photo_file_id]
 
             if len(photo_ids) > 1:
-                # Multiple photos - send as media group
+                # Multiple photos - send as media group (doesn't support inline keyboards)
+                # Then send buttons as separate message
                 media_group = []
                 for i, photo_id in enumerate(photo_ids):
                     if i == 0:
@@ -475,7 +476,7 @@ class TelegramPublisher:
                 )
                 message = messages[0]  # Use first message for publication record
 
-                # Send keyboard as separate message
+                # Send keyboard as separate message (Telegram API limitation)
                 await self.bot.send_message(
                     chat_id=channel,
                     text="👆 Резюме выше",
@@ -490,7 +491,8 @@ class TelegramPublisher:
                     photo=photo_ids[0],
                     caption=message_text,
                     parse_mode="HTML",
-                    reply_markup=keyboard
+                    reply_markup=keyboard,
+                    show_caption_above_media=True
                 )
                 logger.info(f"Published resume {resume.id} with photo to channel {channel}")
             else:

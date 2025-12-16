@@ -1274,7 +1274,8 @@ async def process_about_text(message: Message, state: FSMContext):
         "• в нейтральной обстановке\n"
         "• в одежде, подходящей для работы в HoReCa\n"
         "• улыбаешься или выглядишь доброжелательно\n\n"
-        "Отправляй, как будешь готов!"
+        "Отправляй, как будешь готов!",
+        reply_markup=get_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.photo)
 
@@ -1304,6 +1305,127 @@ async def skip_about(callback: CallbackQuery, state: FSMContext):
         "• в нейтральной обстановке\n"
         "• в одежде, подходящей для работы в HoReCa\n"
         "• улыбаешься или выглядишь доброжелательно\n\n"
-        "Отправляй, как будешь готов!"
+        "Отправляй, как будешь готов!",
+        reply_markup=get_cancel_keyboard()
     )
     await state.set_state(ResumeCreationStates.photo)
+
+
+# ============ TEXT HANDLERS FOR INLINE STATES ============
+# These handle text input (Back/Cancel buttons) in states that expect inline callbacks
+
+@router.message(ResumeCreationStates.add_work_experience)
+async def process_add_work_experience_text(message: Message, state: FSMContext):
+    """Handle text input in add work experience question."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        from bot.keyboards.positions import get_work_schedule_keyboard
+        data = await state.get_data()
+        selected = data.get("work_schedule", [])
+        await message.answer(
+            "Хорошо! Теперь разберёмся с твоим графиком. 🕒\n\n"
+            "<b>Какой график работы тебе подходит?</b>\n"
+            "(можно выбрать несколько вариантов)",
+            reply_markup=get_work_schedule_keyboard(selected)
+        )
+        await state.set_state(ResumeCreationStates.work_schedule)
+        return
+
+    # Ignore other text
+    await message.answer(
+        "Пожалуйста, выбери ответ из кнопок выше.",
+        reply_markup=get_yes_no_keyboard()
+    )
+
+
+@router.message(ResumeCreationStates.add_education)
+async def process_add_education_text(message: Message, state: FSMContext):
+    """Handle text input in add education question."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "<b>Есть ли у тебя опыт работы?</b>",
+            reply_markup=get_yes_no_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.add_work_experience)
+        return
+
+    # Ignore other text
+    await message.answer(
+        "Пожалуйста, выбери ответ из кнопок выше.",
+        reply_markup=get_yes_no_keyboard()
+    )
+
+
+@router.message(ResumeCreationStates.add_courses)
+async def process_add_courses_text(message: Message, state: FSMContext):
+    """Handle text input in add courses question."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        await message.answer(
+            "🎓 <b>Образование</b>\n\n"
+            "Добавим информацию об образовании?",
+            reply_markup=get_yes_no_keyboard()
+        )
+        await state.set_state(ResumeCreationStates.add_education)
+        return
+
+    # Ignore other text
+    await message.answer(
+        "Пожалуйста, выбери ответ из кнопок выше.",
+        reply_markup=get_yes_no_keyboard()
+    )
+
+
+@router.message(ResumeCreationStates.add_languages)
+async def process_add_languages_text(message: Message, state: FSMContext):
+    """Handle text input in add languages question."""
+    if message.text == "🚫 Отменить создание":
+        await handle_cancel_resume(message, state)
+        return
+
+    if message.text == "◀️ Назад":
+        # Go back to skills or courses depending on flow
+        data = await state.get_data()
+        if data.get("work_experience"):
+            # Had experience, show skills
+            from bot.keyboards.positions import get_skills_keyboard, get_combined_skills_keyboard
+            position_categories = data.get("position_categories", [])
+            skills = data.get("skills", [])
+
+            if len(position_categories) > 1:
+                kb = get_combined_skills_keyboard(position_categories, skills)
+            else:
+                category = position_categories[0] if position_categories else "other"
+                kb = get_skills_keyboard(category, skills)
+
+            await message.answer(
+                "🛠 <b>Твои навыки</b>\n\n"
+                "Выбери те, которыми владеешь.",
+                reply_markup=kb
+            )
+            await state.set_state(ResumeCreationStates.skills)
+        else:
+            # No experience, go back to courses
+            await message.answer(
+                "🎓 <b>Повышение квалификации, курсы</b>\n\n"
+                "Добавить курсы или сертификаты?",
+                reply_markup=get_yes_no_keyboard()
+            )
+            await state.set_state(ResumeCreationStates.add_courses)
+        return
+
+    # Ignore other text
+    await message.answer(
+        "Пожалуйста, выбери ответ из кнопок выше.",
+        reply_markup=get_yes_no_keyboard()
+    )

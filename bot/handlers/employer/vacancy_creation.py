@@ -24,6 +24,16 @@ router = Router()
 router.message.filter(IsNotMenuButton())
 
 
+async def _handle_cancel_vacancy(message: Message, state: FSMContext):
+    """Common cancel handler for vacancy creation."""
+    await state.clear()
+    from bot.keyboards.common import get_main_menu_employer
+    await message.answer(
+        "❌ Создание вакансии отменено.",
+        reply_markup=get_main_menu_employer()
+    )
+
+
 def get_back_to_categories_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard with back to categories button."""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -121,6 +131,19 @@ async def back_to_categories(callback: CallbackQuery, state: FSMContext):
 @router.message(VacancyCreationStates.position_custom)
 async def process_custom_position(message: Message, state: FSMContext):
     """Process custom position input."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to position category
+        await message.answer(
+            "<b>Выберите категорию должности:</b>",
+            reply_markup=get_position_categories_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.position_category)
+        return
+
     position = message.text.strip()
 
     if len(position) < 2:
@@ -230,6 +253,22 @@ async def process_cuisine_toggle(callback: CallbackQuery, state: FSMContext):
 @router.message(VacancyCreationStates.cuisines_custom)
 async def process_custom_cuisine_vacancy(message: Message, state: FSMContext):
     """Process custom cuisine input for vacancy."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to cuisines selection
+        data = await state.get_data()
+        cuisines = data.get("cuisines", [])
+        await message.answer(
+            "<b>Выберите типы кухонь:</b>\n"
+            "(можно выбрать несколько)",
+            reply_markup=get_cuisines_keyboard(selected_cuisines=cuisines)
+        )
+        await state.set_state(VacancyCreationStates.cuisines)
+        return
+
     custom_cuisine = message.text.strip()
 
     if len(custom_cuisine) < 2:
@@ -285,6 +324,30 @@ async def process_cuisines_done(callback: CallbackQuery, state: FSMContext):
 @router.message(VacancyCreationStates.company_name)
 async def process_company_name(message: Message, state: FSMContext):
     """Process company name."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to cuisines (if cook) or position
+        data = await state.get_data()
+        category = data.get("position_category")
+        if category == "cook":
+            cuisines = data.get("cuisines", [])
+            await message.answer(
+                "<b>Выберите типы кухонь:</b>\n"
+                "(можно выбрать несколько)",
+                reply_markup=get_cuisines_keyboard(selected_cuisines=cuisines)
+            )
+            await state.set_state(VacancyCreationStates.cuisines)
+        else:
+            await message.answer(
+                "<b>Выберите конкретную должность:</b>",
+                reply_markup=get_positions_keyboard(category)
+            )
+            await state.set_state(VacancyCreationStates.position)
+        return
+
     company_name = message.text.strip()
 
     if len(company_name) < 2:
@@ -358,6 +421,19 @@ async def process_company_type(callback: CallbackQuery, state: FSMContext):
 @router.message(VacancyCreationStates.company_description)
 async def process_company_description(message: Message, state: FSMContext):
     """Process company description."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to company type
+        await message.answer(
+            "<b>Выберите тип заведения:</b>",
+            reply_markup=get_company_type_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.company_type)
+        return
+
     description = message.text.strip()
 
     if len(description) < 10:
@@ -438,6 +514,19 @@ async def skip_company_website(callback: CallbackQuery, state: FSMContext):
 @router.message(VacancyCreationStates.company_website)
 async def process_company_website(message: Message, state: FSMContext):
     """Process company website."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to company size
+        await message.answer(
+            "<b>Какой размер вашей компании?</b>",
+            reply_markup=get_company_size_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.company_size)
+        return
+
     website = message.text.strip()
 
     if website.lower() not in ['-', 'нет', 'no', 'пропустить']:
@@ -508,6 +597,20 @@ async def process_city_selection(callback: CallbackQuery, state: FSMContext):
 @router.message(VacancyCreationStates.city)
 async def process_city_text(message: Message, state: FSMContext):
     """Process city text input (fallback)."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to company website
+        await message.answer(
+            "<b>Есть ли у вашей компании сайт?</b>\n"
+            "Введите ссылку или пропустите этот шаг:",
+            reply_markup=get_skip_keyboard("website")
+        )
+        await state.set_state(VacancyCreationStates.company_website)
+        return
+
     city = message.text.strip()
 
     if len(city) < 2:
@@ -530,6 +633,20 @@ async def process_city_text(message: Message, state: FSMContext):
 @router.message(VacancyCreationStates.city_custom)
 async def process_city_custom(message: Message, state: FSMContext):
     """Process custom city input."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to city selection
+        await message.answer(
+            "📍 <b>Местоположение</b>\n\n"
+            "В каком городе находится вакансия?",
+            reply_markup=get_city_selection_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.city)
+        return
+
     city = message.text.strip()
 
     if len(city) < 2:
@@ -577,6 +694,20 @@ async def skip_metro(callback: CallbackQuery, state: FSMContext):
 @router.message(VacancyCreationStates.nearest_metro)
 async def process_metro(message: Message, state: FSMContext):
     """Process metro stations input."""
+    # Handle back/cancel buttons
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to city selection
+        await message.answer(
+            "📍 <b>Местоположение</b>\n\n"
+            "В каком городе находится вакансия?",
+            reply_markup=get_city_selection_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.city)
+        return
+
     metro_text = message.text.strip()
 
     if metro_text.lower() in ['-', 'нет', 'пропустить']:
@@ -625,3 +756,111 @@ async def cancel_vacancy_creation(message: Message, state: FSMContext):
             "❌ Создание вакансии отменено.",
             reply_markup=get_main_menu_employer()
         )
+
+
+# ============ TEXT HANDLERS FOR INLINE STATES (BACK/CANCEL) ============
+
+@router.message(VacancyCreationStates.position_category)
+async def process_position_category_text(message: Message, state: FSMContext):
+    """Handle text input in position category state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # First step - back means cancel
+        await _handle_cancel_vacancy(message, state)
+        return
+    # Ignore other text - user should use inline buttons
+    await message.answer(
+        "Пожалуйста, выберите категорию должности, используя кнопки выше.",
+        reply_markup=get_position_categories_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.position)
+async def process_position_text(message: Message, state: FSMContext):
+    """Handle text input in position state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to position category
+        await message.answer(
+            "<b>Выберите категорию должности:</b>",
+            reply_markup=get_position_categories_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.position_category)
+        return
+    # Ignore other text
+    data = await state.get_data()
+    category = data.get("position_category")
+    await message.answer(
+        "Пожалуйста, выберите должность, используя кнопки выше.",
+        reply_markup=get_positions_keyboard(category)
+    )
+
+
+@router.message(VacancyCreationStates.cuisines)
+async def process_cuisines_text(message: Message, state: FSMContext):
+    """Handle text input in cuisines state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to position selection
+        data = await state.get_data()
+        category = data.get("position_category")
+        await message.answer(
+            "<b>Выберите конкретную должность:</b>",
+            reply_markup=get_positions_keyboard(category)
+        )
+        await state.set_state(VacancyCreationStates.position)
+        return
+    # Ignore other text
+    data = await state.get_data()
+    cuisines = data.get("cuisines", [])
+    await message.answer(
+        "Пожалуйста, выберите типы кухонь, используя кнопки выше.",
+        reply_markup=get_cuisines_keyboard(selected_cuisines=cuisines)
+    )
+
+
+@router.message(VacancyCreationStates.company_type)
+async def process_company_type_text(message: Message, state: FSMContext):
+    """Handle text input in company type state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to company name
+        await message.answer(
+            "<b>Как называется ваша компания?</b>"
+        )
+        await state.set_state(VacancyCreationStates.company_name)
+        return
+    # Ignore other text
+    await message.answer(
+        "Пожалуйста, выберите тип заведения, используя кнопки выше.",
+        reply_markup=get_company_type_keyboard()
+    )
+
+
+@router.message(VacancyCreationStates.company_size)
+async def process_company_size_text(message: Message, state: FSMContext):
+    """Handle text input in company size state (back/cancel buttons)."""
+    if message.text == "🚫 Отменить создание":
+        await _handle_cancel_vacancy(message, state)
+        return
+    if message.text == "◀️ Назад":
+        # Go back to company type
+        await message.answer(
+            "<b>Выберите тип заведения:</b>",
+            reply_markup=get_company_type_keyboard()
+        )
+        await state.set_state(VacancyCreationStates.company_type)
+        return
+    # Ignore other text
+    await message.answer(
+        "Пожалуйста, выберите размер компании, используя кнопки выше.",
+        reply_markup=get_company_size_keyboard()
+    )

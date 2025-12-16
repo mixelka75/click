@@ -203,14 +203,15 @@ async def show_resume_card(message: Message, state: FSMContext, index: int):
         buttons.append(nav_buttons)
 
     # Action buttons
+    resume_id = resume.get('_id') or resume.get('id')
     buttons.append([
-        InlineKeyboardButton(text="📋 Подробнее", callback_data=f"res_details:{resume['id']}")
+        InlineKeyboardButton(text="📋 Подробнее", callback_data=f"res_details:{resume_id}")
     ])
     buttons.append([
-        InlineKeyboardButton(text="✉️ Пригласить", callback_data=f"res_invite:{resume['id']}")
+        InlineKeyboardButton(text="✉️ Пригласить", callback_data=f"res_invite:{resume_id}")
     ])
     buttons.append([
-        InlineKeyboardButton(text="⭐ В избранное", callback_data=f"fav:add:resume:{resume['id']}")
+        InlineKeyboardButton(text="⭐ В избранное", callback_data=f"fav:add:resume:{resume_id}")
     ])
 
     buttons.append([InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_resume_search")])
@@ -522,10 +523,11 @@ async def start_invitation(callback: CallbackQuery, state: FSMContext):
                 # Show vacancy selection
                 buttons = []
                 for vacancy in active_vacancies:
+                    vacancy_id = vacancy.get('_id') or vacancy.get('id')
                     buttons.append([
                         InlineKeyboardButton(
                             text=f"💼 {vacancy.get('position')} ({vacancy.get('city')})",
-                            callback_data=f"invite_vacancy:{vacancy['id']}"
+                            callback_data=f"invite_vacancy:{vacancy_id}"
                         )
                     ])
 

@@ -181,25 +181,23 @@ class CallbackAutoRecoveryMiddleware(BaseMiddleware):
             _user_stuck_tracker[user_id] = {"count": 0, "last_state": new_state}
             return result
 
-        # State didn't change - increment stuck counter only if callback wasn't answered
-        # (answered callbacks usually mean the action was processed)
-        if not event.answered:
-            if tracker["last_state"] == current_state:
-                tracker["count"] += 1
-            else:
-                tracker["count"] = 1
-                tracker["last_state"] = current_state
+        # State didn't change - increment stuck counter
+        if tracker["last_state"] == current_state:
+            tracker["count"] += 1
+        else:
+            tracker["count"] = 1
+            tracker["last_state"] = current_state
 
-            logger.debug(
-                f"User {user_id} callback stuck count: {tracker['count']}/{MAX_STUCK_COUNT}"
+        logger.debug(
+            f"User {user_id} callback stuck count: {tracker['count']}/{MAX_STUCK_COUNT}"
+        )
+
+        # Check if stuck threshold reached
+        if tracker["count"] >= MAX_STUCK_COUNT:
+            logger.warning(
+                f"User {user_id} exceeded callback stuck threshold in state {current_state}"
             )
-
-            # Check if stuck threshold reached
-            if tracker["count"] >= MAX_STUCK_COUNT:
-                logger.warning(
-                    f"User {user_id} exceeded callback stuck threshold in state {current_state}"
-                )
-                await _return_to_menu(event, state)
+            await _return_to_menu(event, state)
 
         return result
 

@@ -81,10 +81,11 @@ async def manage_responses(message: Message, state: FSMContext):
                 buttons = []
                 for vacancy in vacancies_with_responses:
                     responses_count = vacancy.get('responses_count', 0)
+                    vacancy_id = vacancy.get('_id') or vacancy.get('id')
                     buttons.append([
                         InlineKeyboardButton(
                             text=f"💼 {vacancy.get('position')} ({responses_count} откл.)",
-                            callback_data=f"manage_vac:{vacancy['id']}"
+                            callback_data=f"manage_vac:{vacancy_id}"
                         )
                     ])
 
@@ -159,7 +160,7 @@ async def show_vacancy_responses(callback: CallbackQuery, state: FSMContext):
 
 
 async def show_response_card(message: Message, state: FSMContext, index: int) -> None:
-    """Render a response card with photo, details and actions."""
+    """Render a response card with photo, details and actions in ONE message."""
 
     data = await state.get_data()
     responses = data.get("responses", [])
@@ -185,24 +186,10 @@ async def show_response_card(message: Message, state: FSMContext, index: int) ->
 
     await cleanup_response_messages(message, state)
 
-    photo_message_id = None
-    photo_id = resume.get("photo_file_id") or resume.get("photo_url")
-    if photo_id:
-        caption_lines = [
-            resume.get("full_name"),
-            resume.get("desired_position"),
-            resume.get("city"),
-        ]
-        caption = "\n".join(filter(None, caption_lines)).strip() or "Фото кандидата"
-        try:
-            photo_message = await message.answer_photo(photo=photo_id, caption=caption)
-            photo_message_id = photo_message.message_id
-        except Exception as exc:  # noqa: BLE001 - photo is optional, log and continue
-            logger.debug(f"Failed to send response photo: {exc}")
-            photo_message_id = None
-
+    # Build the full text
     text = format_response_card(response, resume, vacancy, index + 1, total)
 
+    # Build keyboard with buttons
     buttons = []
     response_id = response.get("id")
     status = response.get("status")
@@ -212,7 +199,7 @@ async def show_response_card(message: Message, state: FSMContext, index: int) ->
     if index > 0:
         nav_row.append(InlineKeyboardButton(text="◀️ Предыдущий", callback_data=f"resp_nav:prev:{index}"))
     if index < total - 1:
-        nav_row.append(InlineKeyboardButton(text="Следующий отклик ▶️", callback_data=f"resp_nav:next:{index}"))
+        nav_row.append(InlineKeyboardButton(text="Следующий ▶️", callback_data=f"resp_nav:next:{index}"))
     if nav_row:
         buttons.append(nav_row)
 
@@ -221,7 +208,7 @@ async def show_response_card(message: Message, state: FSMContext, index: int) ->
         if status in {"pending", "viewed"}:
             buttons.append([
                 InlineKeyboardButton(
-                    text="🤝 Предложить собеседование",
+                    text="🤝 Собеседование",
                     callback_data=f"resp_invite:{response_id}"
                 ),
                 InlineKeyboardButton(
@@ -269,112 +256,86 @@ async def show_response_card(message: Message, state: FSMContext, index: int) ->
     if resume_id:
         buttons.append([
             InlineKeyboardButton(
-                text="📄 Посмотреть резюме полностью",
+                text="📄 Полное резюме",
                 callback_data=f"resp_view_resume:{resume_id}"
             )
         ])
 
     buttons.append([
-        InlineKeyboardButton(text="◀️ Назад к вакансиям", callback_data="back_to_vacancies")
+        InlineKeyboardButton(text="◀️ К вакансиям", callback_data="back_to_vacancies")
     ])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    card_message = await message.answer(text, reply_markup=keyboard)
+    # Try to send photo with caption, fallback to text only
+    photo_id = resume.get("photo_file_id") or resume.get("photo_url")
+    card_message = None
+
+    if photo_id:
+        # Telegram caption limit is 1024 chars
+        caption = text if len(text) <= 1024 else text[:1020] + "..."
+        try:
+            card_message = await message.answer_photo(
+                photo=photo_id,
+                caption=caption,
+                reply_markup=keyboard
+            )
+        except Exception as exc:
+            logger.debug(f"Failed to send photo with caption: {exc}")
+            # Fallback to text only
+            card_message = await message.answer(text, reply_markup=keyboard)
+    else:
+        card_message = await message.answer(text, reply_markup=keyboard)
 
     await state.update_data(
         current_response_index=index,
         current_response_message_id=card_message.message_id,
-        current_response_photo_id=photo_message_id,
+        current_response_photo_id=None,  # Now single message, no separate photo
     )
 
 
 def format_response_card(response: dict, resume: dict, vacancy: dict, index: int, total: int) -> str:
-    """Format response information."""
-    lines = [f"📬 <b>Отклик {index} из {total}</b>\n"]
+    """Format response information (compact for photo caption)."""
+    lines = [f"📬 <b>Отклик {index}/{total}</b>"]
 
-    # Vacancy info
-    lines.append(f"💼 <b>Вакансия:</b> {vacancy.get('position', 'Неизвестно')}")
-    lines.append(f"📍 {vacancy.get('city', '')}\n")
+    # Vacancy info (one line)
+    lines.append(f"💼 {vacancy.get('position', '?')} • {vacancy.get('city', '')}")
+    lines.append("")
 
-    # Candidate info
-    lines.append("<b>👤 КАНДИДАТ</b>")
-    lines.append(f"ФИО: {resume.get('full_name', 'Не указано')}")
-    if resume.get('citizenship'):
-        lines.append(f"Гражданство: {resume.get('citizenship')}")
-    if resume.get('birth_date'):
-        try:
-            birth_dt = datetime.strptime(resume['birth_date'], "%Y-%m-%d")
-            lines.append(f"Дата рождения: {birth_dt.strftime('%d.%m.%Y')}")
-        except (ValueError, TypeError):
-            lines.append(f"Дата рождения: {resume.get('birth_date')}")
-    lines.append(f"Желаемая должность: {resume.get('desired_position', '-')}")
-
-    if resume.get('city'):
-        lines.append(f"Город: {resume.get('city')}")
-
-    if resume.get('phone'):
-        lines.append(f"📱 {resume.get('phone')}")
-    if resume.get('email'):
-        lines.append(f"📧 {resume.get('email')}")
-    if resume.get('telegram'):
-        lines.append(f"✈️ {resume.get('telegram')}")
-    if resume.get('other_contacts'):
-        lines.append(f"🔗 {resume.get('other_contacts')}")
+    # Candidate info (compact)
+    lines.append(f"<b>{resume.get('full_name', 'Не указано')}</b>")
+    lines.append(f"📍 {resume.get('city', '-')} • {resume.get('desired_position', '-')}")
 
     if resume.get('desired_salary'):
         lines.append(f"💰 От {resume['desired_salary']:,} ₽")
 
-    # Experience
     if resume.get('total_experience_years'):
         lines.append(f"📊 Опыт: {resume['total_experience_years']} лет")
 
-    # Skills preview
+    # Skills (compact)
     if resume.get('skills'):
         skills = ", ".join(resume['skills'][:3])
         if len(resume['skills']) > 3:
-            skills += f" и ещё {len(resume['skills']) - 3}"
-        lines.append(f"🎯 Навыки: {skills}")
+            skills += f" +{len(resume['skills']) - 3}"
+        lines.append(f"🎯 {skills}")
 
-    # Languages preview
-    if resume.get('languages'):
-        lang_items = [
-            f"{lang.get('language')} ({lang.get('level')})"
-            for lang in resume['languages'][:2]
-            if lang
-        ]
-        if lang_items:
-            lang_text = ", ".join(lang_items)
-            if len(resume['languages']) > 2:
-                lang_text += f" и ещё {len(resume['languages']) - 2}"
-            lines.append(f"🗣 Языки: {lang_text}")
-
-    lines.append("")
-
-    # Cover letter
-    if response.get('cover_letter'):
-        lines.append("<b>✉️ СОПРОВОДИТЕЛЬНОЕ ПИСЬМО</b>")
-        cover = response['cover_letter'][:200]
-        if len(response['cover_letter']) > 200:
-            cover += "..."
-        lines.append(cover)
+    # Cover letter / message (shortened)
+    cover = response.get('message') or response.get('cover_letter')
+    if cover:
         lines.append("")
+        cover_text = cover[:100] + "..." if len(cover) > 100 else cover
+        lines.append(f"✉️ {cover_text}")
 
     # Status
+    lines.append("")
     status_text = {
         "pending": "⏳ Новый",
         "viewed": "👀 Просмотрен",
         "invited": "✅ Приглашен",
         "accepted": "🎉 Принят",
         "rejected": "❌ Отклонен"
-    }.get(response.get('status'), response.get('status', 'Неизвестно'))
-
+    }.get(response.get('status'), response.get('status', '?'))
     lines.append(f"<b>Статус:</b> {status_text}")
-
-    # Date
-    if response.get('created_at'):
-        created = response['created_at'][:10]
-        lines.append(f"<b>Дата отклика:</b> {created}")
 
     return "\n".join(lines)
 

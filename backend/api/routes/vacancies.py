@@ -27,8 +27,8 @@ class VacancyCreateRequest(BaseModel):
     company_size: Optional[str] = None
     company_website: Optional[str] = None
     city: str
-    address: Optional[str] = None
     nearest_metro: Optional[str] = None
+    metro_stations: Optional[List[str]] = None
     salary_min: Optional[int] = None
     salary_max: Optional[int] = None
     salary_type: Optional[str] = None
@@ -77,11 +77,11 @@ async def create_vacancy(request: VacancyCreateRequest):
     expires_at = datetime.utcnow() + timedelta(days=publication_duration)
 
     # Ensure all list fields are not None
-    list_fields = ["work_schedule", "required_skills", "benefits", "required_documents", "responsibilities", "cuisines"]
+    list_fields = ["work_schedule", "required_skills", "benefits", "required_documents", "responsibilities", "cuisines", "metro_stations"]
     for field in list_fields:
         if vacancy_data.get(field) is None:
-            if field == "cuisines":
-                vacancy_data.pop(field, None)  # Remove cuisines if None
+            if field in ["cuisines", "metro_stations"]:
+                vacancy_data.pop(field, None)  # Remove optional fields if None
             else:
                 vacancy_data[field] = []
 
@@ -105,6 +105,64 @@ async def create_vacancy(request: VacancyCreateRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to create vacancy: {str(e)}"
         )
+
+
+@router.get(
+    "/vacancies/search",
+    response_model=List[Vacancy],
+    summary="Search vacancies with advanced filters"
+)
+async def search_vacancies(
+    q: Optional[str] = None,  # Search query
+    position: Optional[str] = None,
+    category: Optional[str] = None,
+    city: Optional[str] = None,
+    company_type: Optional[str] = None,
+    required_skills: Optional[str] = None,  # Comma-separated
+    min_salary: Optional[int] = None,
+    max_salary: Optional[int] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100)
+):
+    """Advanced search for vacancies."""
+    query = {
+        "status": VacancyStatus.ACTIVE,
+        "is_published": True,
+        "expires_at": {"$gt": datetime.utcnow()}
+    }
+
+    if q:
+        # Full-text search
+        query["$or"] = [
+            {"position": {"$regex": q, "$options": "i"}},
+            {"description": {"$regex": q, "$options": "i"}},
+            {"company_name": {"$regex": q, "$options": "i"}},
+        ]
+
+    if position:
+        query["position"] = {"$regex": position, "$options": "i"}
+
+    if category:
+        query["position_category"] = category
+
+    if city:
+        query["city"] = {"$regex": city, "$options": "i"}
+
+    if company_type:
+        query["company_type"] = company_type
+
+    if required_skills:
+        skill_list = [s.strip() for s in required_skills.split(",")]
+        query["required_skills"] = {"$in": skill_list}
+
+    if min_salary:
+        query["salary_min"] = {"$gte": min_salary}
+
+    if max_salary:
+        query["salary_max"] = {"$lte": max_salary}
+
+    vacancies = await Vacancy.find(query).skip(skip).limit(limit).to_list()
+    return vacancies
 
 
 @router.get(
@@ -353,64 +411,6 @@ async def delete_vacancy(vacancy_id: PydanticObjectId):
             logger.error(f"Failed to delete publication {pub.id}: {e}")
 
     await vacancy.delete()
-
-
-@router.get(
-    "/vacancies/search",
-    response_model=List[Vacancy],
-    summary="Search vacancies with advanced filters"
-)
-async def search_vacancies(
-    q: Optional[str] = None,  # Search query
-    position: Optional[str] = None,
-    category: Optional[str] = None,
-    city: Optional[str] = None,
-    company_type: Optional[str] = None,
-    required_skills: Optional[str] = None,  # Comma-separated
-    min_salary: Optional[int] = None,
-    max_salary: Optional[int] = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100)
-):
-    """Advanced search for vacancies."""
-    query = {
-        "status": VacancyStatus.ACTIVE,
-        "is_published": True,
-        "expires_at": {"$gt": datetime.utcnow()}
-    }
-
-    if q:
-        # Full-text search
-        query["$or"] = [
-            {"position": {"$regex": q, "$options": "i"}},
-            {"description": {"$regex": q, "$options": "i"}},
-            {"company_name": {"$regex": q, "$options": "i"}},
-        ]
-
-    if position:
-        query["position"] = {"$regex": position, "$options": "i"}
-
-    if category:
-        query["position_category"] = category
-
-    if city:
-        query["city"] = {"$regex": city, "$options": "i"}
-
-    if company_type:
-        query["company_type"] = company_type
-
-    if required_skills:
-        skill_list = [s.strip() for s in required_skills.split(",")]
-        query["required_skills"] = {"$in": skill_list}
-
-    if min_salary:
-        query["salary_min"] = {"$gte": min_salary}
-
-    if max_salary:
-        query["salary_max"] = {"$lte": max_salary}
-
-    vacancies = await Vacancy.find(query).skip(skip).limit(limit).to_list()
-    return vacancies
 
 
 @router.get(

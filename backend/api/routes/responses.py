@@ -70,7 +70,7 @@ async def create_response(
         employer=vacancy.user,
         resume=resume,
         vacancy=vacancy,
-        cover_letter=message,
+        message=message,
         is_invitation=False
     )
     await response.insert()
@@ -215,11 +215,18 @@ async def get_vacancy_responses(
             detail="Vacancy not found"
         )
 
-    query = {"vacancy.$id": vacancy_id}
+    # Use Beanie's attribute-based query for Link references
     if status:
-        query["status"] = status
-
-    responses = await Response.find(query, fetch_links=True).skip(skip).limit(limit).to_list()
+        responses = await Response.find(
+            Response.vacancy.id == vacancy_id,
+            Response.status == status,
+            fetch_links=True
+        ).skip(skip).limit(limit).to_list()
+    else:
+        responses = await Response.find(
+            Response.vacancy.id == vacancy_id,
+            fetch_links=True
+        ).skip(skip).limit(limit).to_list()
     return responses
 
 
@@ -242,11 +249,18 @@ async def get_applicant_responses(
             detail="Applicant not found"
         )
 
-    query = {"applicant.$id": applicant_id}
+    # Use Beanie's attribute-based query for Link references
     if status:
-        query["status"] = status
-
-    responses = await Response.find(query, fetch_links=True).skip(skip).limit(limit).to_list()
+        responses = await Response.find(
+            Response.applicant.id == applicant_id,
+            Response.status == status,
+            fetch_links=True
+        ).skip(skip).limit(limit).to_list()
+    else:
+        responses = await Response.find(
+            Response.applicant.id == applicant_id,
+            fetch_links=True
+        ).skip(skip).limit(limit).to_list()
     return responses
 
 
@@ -337,11 +351,12 @@ async def get_employer_responses(
             detail="Employer not found"
         )
 
-    query = {"employer.$id": employer_id}
+    # Use Beanie's attribute-based query for Link references
+    conditions = [Response.employer.id == employer_id]
     if status:
-        query["status"] = status
+        conditions.append(Response.status == status)
     if vacancy_id:
-        query["vacancy.$id"] = vacancy_id
+        conditions.append(Response.vacancy.id == vacancy_id)
 
-    responses = await Response.find(query, fetch_links=True).skip(skip).limit(limit).to_list()
+    responses = await Response.find(*conditions, fetch_links=True).skip(skip).limit(limit).to_list()
     return responses

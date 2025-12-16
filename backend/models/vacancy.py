@@ -51,8 +51,8 @@ class Vacancy(Document):
 
     # Work location
     city: str
-    address: Optional[str] = None
-    nearest_metro: Optional[str] = None
+    nearest_metro: Optional[str] = None  # Single metro for backward compatibility
+    metro_stations: List[str] = Field(default_factory=list)  # Multiple metro stations
 
     # Benefits
     benefits: List[str] = Field(default_factory=list)
@@ -112,7 +112,7 @@ class Vacancy(Document):
                 "company_name": "Ресторан Белуга",
                 "company_type": "Ресторан",
                 "city": "Москва",
-                "address": "ул. Пушкина, д. 10",
+                "metro_stations": ["Тверская", "Пушкинская"],
                 "employment_type": "Полная занятость",
                 "work_schedule": ["Посменный график"],
                 "required_experience": "От 1 года",

@@ -97,6 +97,19 @@ async def create_resume(request: ResumeCreateRequest):
             detail=f"Достигнут лимит резюме ({MAX_RESUMES_PER_USER}). Удалите старое резюме, чтобы создать новое."
         )
 
+    # Validate photos (1-5 required)
+    photo_ids = request.photo_file_ids or []
+    if len(photo_ids) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Необходимо добавить минимум 1 фото для резюме."
+        )
+    if len(photo_ids) > 5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Максимум 5 фото для резюме."
+        )
+
     resume_data = request.model_dump(exclude={"user_id"})
 
     # Set expiration date
@@ -199,6 +212,55 @@ async def create_resume(request: ResumeCreateRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to create resume: {str(e)}"
         )
+
+
+@router.get(
+    "/resumes/search",
+    response_model=List[Resume],
+    summary="Search resumes with advanced filters"
+)
+async def search_resumes(
+    q: Optional[str] = None,  # Search query
+    position: Optional[str] = None,
+    category: Optional[str] = None,
+    city: Optional[str] = None,
+    skills: Optional[str] = None,  # Comma-separated
+    experience_years: Optional[int] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100)
+):
+    """Advanced search for resumes."""
+    query = {
+        "status": ResumeStatus.ACTIVE,
+        "is_published": True
+    }
+
+    if q:
+        # Full-text search in multiple fields
+        query["$or"] = [
+            {"full_name": {"$regex": q, "$options": "i"}},
+            {"about": {"$regex": q, "$options": "i"}},
+            {"desired_position": {"$regex": q, "$options": "i"}},
+        ]
+
+    if position:
+        query["desired_position"] = {"$regex": position, "$options": "i"}
+
+    if category:
+        query["position_category"] = category
+
+    if city:
+        query["city"] = {"$regex": city, "$options": "i"}
+
+    if skills:
+        skill_list = [s.strip() for s in skills.split(",")]
+        query["skills"] = {"$in": skill_list}
+
+    if experience_years:
+        query["total_experience_years"] = {"$gte": experience_years}
+
+    resumes = await Resume.find(query).skip(skip).limit(limit).to_list()
+    return resumes
 
 
 @router.get(
@@ -411,52 +473,3 @@ async def delete_resume(resume_id: PydanticObjectId):
         await pub.delete()
 
     await resume.delete()
-
-
-@router.get(
-    "/resumes/search",
-    response_model=List[Resume],
-    summary="Search resumes with advanced filters"
-)
-async def search_resumes(
-    q: Optional[str] = None,  # Search query
-    position: Optional[str] = None,
-    category: Optional[str] = None,
-    city: Optional[str] = None,
-    skills: Optional[str] = None,  # Comma-separated
-    experience_years: Optional[int] = None,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100)
-):
-    """Advanced search for resumes."""
-    query = {
-        "status": ResumeStatus.ACTIVE,
-        "is_published": True
-    }
-
-    if q:
-        # Full-text search in multiple fields
-        query["$or"] = [
-            {"full_name": {"$regex": q, "$options": "i"}},
-            {"about": {"$regex": q, "$options": "i"}},
-            {"desired_position": {"$regex": q, "$options": "i"}},
-        ]
-
-    if position:
-        query["desired_position"] = {"$regex": position, "$options": "i"}
-
-    if category:
-        query["position_category"] = category
-
-    if city:
-        query["city"] = {"$regex": city, "$options": "i"}
-
-    if skills:
-        skill_list = [s.strip() for s in skills.split(",")]
-        query["skills"] = {"$in": skill_list}
-
-    if experience_years:
-        query["total_experience_years"] = {"$gte": experience_years}
-
-    resumes = await Resume.find(query).skip(skip).limit(limit).to_list()
-    return resumes
